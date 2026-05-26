@@ -1,0 +1,35 @@
+# WHY: Automates release PR creation and changelog management using the
+# repo-local release-please-config.json + .release-please-manifest.json.
+# Operator + orchestrator co-decide each cut — never auto-merge release PRs.
+name: Release Please (reusable)
+
+on:
+  workflow_call:
+    outputs:
+      release_created:
+        description: "Whether a release was created"
+        value: ${{ jobs.release-please.outputs.release_created }}
+      tag_name:
+        description: "The tag name if a release was created"
+        value: ${{ jobs.release-please.outputs.tag_name }}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

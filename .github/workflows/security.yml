@@ -1,0 +1,110 @@
+# WHY: Block merges on known vulnerabilities and license/source/ban violations.
+# Runs cargo-audit (RustSec DB) and cargo-deny check (licenses, sources, bans,
+# advisories) on every PR and daily against main so newly-published CVEs are
+# caught even when no PR is open. See standards/CI.md § Vulnerability scanning.
+name: Security (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: "Runner label (ubuntu-latest or self-hosted)"
+        type: string
+        default: "ubuntu-latest"
+        required: false
+      cargo_audit_timeout_minutes:
+        description: "Timeout in minutes for cargo-audit (large workspaces may need 30)"
+        type: number
+        default: 15
+        required: false
+      has_private_deps:
+        description: "Set to true to configure FLEET_REPO_TOKEN git credentials"
+        type: boolean
+        default: false
+        required: false
+    secrets:
+      FLEET_REPO_TOKEN:
+        description: "Token for private fleet dependencies (required when has_private_deps=true)"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  cargo-deny:
+    # WHY: checks licenses, banned crates, source registries, and the RustSec
+    # advisory DB using deny.toml's ignore list. Any finding fails the job;
+    # suppressions require a deny.toml entry with a WHY comment.
+    name: cargo deny
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - name: Configure git credentials for private fleet deps
+        if: ${{ inputs.has_private_deps }}
+        env:
+          FLEET_REPO_TOKEN: ${{ secrets.FLEET_REPO_TOKEN }}
+        run: |
+          if [ -z "${FLEET_REPO_TOKEN}" ]; then
+            echo "FLEET_REPO_TOKEN is not set; cross-repo private deps will fail to fetch." >&2
+            exit 0
+          fi
+          git config --global credential.helper store
+          printf 'https://forkwright:%s@github.com\n' "${FLEET_REPO_TOKEN}" > ~/.git-credentials
+          chmod 0600 ~/.git-credentials
+
+      - uses: EmbarkStudios/cargo-deny-action@a531616d8ce3b9177443e48a1159bc945a099823 # v2.0.19
+        with:
+          # WHY: run every check explicitly so a schema regression in one
+          # section can't silently disable the others.
+          command: check advisories licenses bans sources
+          arguments: --all-features
+          credentials: ${{ inputs.has_private_deps && format('https://forkwright:{0}@github.com', secrets.FLEET_REPO_TOKEN) || '' }}
+          use-git-cli: ${{ inputs.has_private_deps }}
+
+  cargo-audit:
+    # WHY: cargo-deny's advisories check overlaps but uses a different code
+    # path; running cargo-audit independently protects against bugs or
+    # config drift disabling one of the two. See standards/CI.md.
+    name: cargo audit
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ inputs.cargo_audit_timeout_minutes }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - name: Configure git credentials for private fleet deps
+        if: ${{ inputs.has_private_deps }}
+        env:
+          FLEET_REPO_TOKEN: ${{ secrets.FLEET_REPO_TOKEN }}
+        run: |
+          if [ -z "${FLEET_REPO_TOKEN}" ]; then
+            echo "FLEET_REPO_TOKEN is not set; cross-repo private deps will fail to fetch." >&2
+            exit 0
+          fi
+          git config --global credential.helper store
+          printf 'https://forkwright:%s@github.com\n' "${FLEET_REPO_TOKEN}" > ~/.git-credentials
+          chmod 0600 ~/.git-credentials
+
+      - uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1.16.1
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: cargo-audit
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked --version ^0.22
+      - name: cargo audit
+        # WHY: --deny unmaintained,unsound,yanked escalates those categories
+        # to errors. Suppressions go through .cargo/audit.toml — no silent
+        # --ignore flags here.
+        run: cargo audit --deny unmaintained --deny unsound --deny yanked

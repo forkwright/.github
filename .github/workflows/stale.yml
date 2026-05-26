@@ -1,0 +1,49 @@
+# WHY: Close abandoned issues and PRs so the tracker stays signal-only.
+# Fleet-standard timers: 60d issue stale, 30d PR stale, 14d close delay.
+name: Stale (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      days_before_issue_stale:
+        description: "Days of inactivity before marking an issue stale"
+        type: number
+        default: 60
+        required: false
+      days_before_pr_stale:
+        description: "Days of inactivity before marking a PR stale"
+        type: number
+        default: 30
+        required: false
+      days_before_close:
+        description: "Days after stale label before closing"
+        type: number
+        default: 14
+        required: false
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10.3.0
+        with:
+          stale-issue-message: >
+            This issue has been inactive for ${{ inputs.days_before_issue_stale }} days.
+            It will be closed in ${{ inputs.days_before_close }} days unless there is new
+            activity. Remove the `stale` label to keep it open.
+          stale-pr-message: >
+            This PR has been inactive for ${{ inputs.days_before_pr_stale }} days.
+            It will be closed in ${{ inputs.days_before_close }} days unless there is new
+            activity. Remove the `stale` label to keep it open.
+          stale-issue-label: stale
+          stale-pr-label: stale
+          days-before-issue-stale: ${{ inputs.days_before_issue_stale }}
+          days-before-pr-stale: ${{ inputs.days_before_pr_stale }}
+          days-before-issue-close: ${{ inputs.days_before_close }}
+          days-before-pr-close: ${{ inputs.days_before_close }}
+          exempt-issue-labels: "pinned,vision"
+          exempt-pr-labels: "pinned"
