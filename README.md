@@ -93,3 +93,10 @@ Repos not yet converted (busy repos excluded from initial proof):
 - hamma, zetesis, gnomon — convert at will (low traffic)
 
 Proof repos already converted: **theatron**, **dioptron**.
+
+## Visibility requirement
+
+This repo must remain **public**. GitHub does not allow private repos to call
+reusable workflows from a private source repo on a personal account
+(`forkwright` is a personal account, not a GitHub org). Making this repo public
+unblocks both private repos (theatron, kanon, logismos, ...) and public ones.
