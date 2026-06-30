@@ -1,0 +1,84 @@
+# WHY: CodeQL static analysis (actions + rust) with security-extended queries,
+# scheduled + on push to main. Reusable; toolchain + language toggles via inputs.
+name: CodeQL (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      analyze_actions:
+        type: boolean
+        default: true
+        required: false
+      analyze_rust:
+        type: boolean
+        default: true
+        required: false
+      rust_toolchain:
+        type: string
+        default: "stable"
+        required: false
+      queries:
+        type: string
+        default: "+security-extended"
+        required: false
+      actions_timeout_minutes:
+        type: number
+        default: 30
+        required: false
+      rust_timeout_minutes:
+        type: number
+        default: 90
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze-actions:
+    name: Analyze (actions)
+    if: ${{ inputs.analyze_actions }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.actions_timeout_minutes }}
+    permissions:
+      security-events: write
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@dd677812177e0c29f9c970a6c58d8607ae1bfefd # v4
+        with:
+          languages: actions
+          queries: ${{ inputs.queries }}
+      - uses: github/codeql-action/autobuild@dd677812177e0c29f9c970a6c58d8607ae1bfefd # v4
+      - uses: github/codeql-action/analyze@dd677812177e0c29f9c970a6c58d8607ae1bfefd # v4
+        with:
+          category: /language:actions
+
+  analyze-rust:
+    name: Analyze (rust)
+    if: ${{ inputs.analyze_rust }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.rust_timeout_minutes }}
+    permissions:
+      security-events: write
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+        with:
+          toolchain: ${{ inputs.rust_toolchain }}
+      - uses: github/codeql-action/init@dd677812177e0c29f9c970a6c58d8607ae1bfefd # v4
+        with:
+          languages: rust
+          queries: ${{ inputs.queries }}
+      - uses: github/codeql-action/autobuild@dd677812177e0c29f9c970a6c58d8607ae1bfefd # v4
+      - uses: github/codeql-action/analyze@dd677812177e0c29f9c970a6c58d8607ae1bfefd # v4
+        with:
+          category: /language:rust

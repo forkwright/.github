@@ -1,0 +1,8 @@
+# WHY: Bump third-party action SHAs pinned inside the reusable workflows once,
+# fleet-wide, rather than per-repo (spec §6.4). Weekly cadence; low noise.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly

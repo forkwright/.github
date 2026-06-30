@@ -1,0 +1,83 @@
+# WHY (#4278): generated-output attribution markers can leak via commit messages,
+# PR title, and PR body (GitHub squashes the body into the merge commit). Scans all
+# three. Pattern source: caller repo's .github/no-ai-attribution-patterns.txt.
+name: No AI Attribution (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      pattern_file:
+        type: string
+        default: ".github/no-ai-attribution-patterns.txt"
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  no-ai-attribution:
+    name: no-ai-attribution
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Pass trusted automation PRs
+        if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' || github.event.pull_request.user.login == 'release-please[bot]' || github.event.pull_request.user.login == 'github-actions[bot]' }}
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: echo "Attribution check waived for trusted automation PR author ${PR_AUTHOR}."
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.user.login != 'release-please[bot]' && github.event.pull_request.user.login != 'github-actions[bot]' }}
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Scan PR body and title for attribution markers
+        if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.user.login != 'release-please[bot]' && github.event.pull_request.user.login != 'github-actions[bot]' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PATTERN_FILE: ${{ inputs.pattern_file }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [ ! -s "$PATTERN_FILE" ]; then
+            echo "::error::Missing attribution pattern source: ${PATTERN_FILE}"
+            exit 1
+          fi
+          BODY=$(gh pr view "$PR_NUMBER" --json body --jq .body)
+          TITLE=$(gh pr view "$PR_NUMBER" --json title --jq .title)
+          fail=0
+          if printf '%s' "$BODY" | grep -niE -f "$PATTERN_FILE"; then
+            echo "::error::PR body contains attribution marker(s) above."; fail=1
+          fi
+          if printf '%s' "$TITLE" | grep -niE -f "$PATTERN_FILE"; then
+            echo "::error::PR title contains attribution marker(s) above."; fail=1
+          fi
+          [ "$fail" -eq 0 ] || exit 1
+          echo "PR body and title clean of attribution markers."
+
+      - name: Scan PR commits for attribution markers
+        if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.user.login != 'release-please[bot]' && github.event.pull_request.user.login != 'github-actions[bot]' }}
+        env:
+          PATTERN_FILE: ${{ inputs.pattern_file }}
+        run: |
+          set -euo pipefail
+          if [ ! -s "$PATTERN_FILE" ]; then
+            echo "::error::Missing attribution pattern source: ${PATTERN_FILE}"
+            exit 1
+          fi
+          commits=$(git log --format="%H" "origin/${{ github.base_ref }}..HEAD")
+          fail=0
+          for sha in $commits; do
+            message=$(git log -1 --format="%B" "$sha")
+            if printf '%s' "$message" | grep -niE -f "$PATTERN_FILE"; then
+              echo "::error::Commit $sha contains attribution marker(s) above."; fail=1
+            fi
+          done
+          [ "$fail" -eq 0 ] || { echo "::error::Reword/rebase the offending commit(s)."; exit 1; }
+          echo "All PR commits clean of attribution markers."
