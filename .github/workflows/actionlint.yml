@@ -1,0 +1,34 @@
+# WHY: Validate reusable workflow YAML before it merges to main, catching errors
+# that would silently break all 11 fleet repos simultaneously.
+name: actionlint
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: Download actionlint
+        run: |
+          ACTIONLINT_VERSION=1.7.7
+          curl -sSfL \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+            | tar -xz actionlint
+          chmod +x actionlint
+      - name: Run actionlint
+        run: ./actionlint -color .github/workflows/*.yml

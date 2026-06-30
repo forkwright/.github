@@ -1,16 +1,9 @@
-# WHY: Canonical reusable gate-attestation workflow. Every non-automation PR
-# must carry a Gate-Passed trailer proving the local gate ran; trusted bots
-# (dependabot, release-please) are waived automatically.
+# WHY: Every non-automation PR must carry a Gate-Passed trailer proving the local
+# gate ran. Trusted bots are waived. Reusable; pure trailer verification, fully invariant.
 name: Gate Attestation (reusable)
 
 on:
-  workflow_call:
-    inputs:
-      runner:
-        description: "Runner label (ubuntu-latest or self-hosted)"
-        type: string
-        default: "ubuntu-latest"
-        required: false
+  workflow_call: {}
 
 permissions:
   contents: read
@@ -22,40 +15,38 @@ concurrency:
 jobs:
   gate-attestation:
     name: gate-attestation
-    runs-on: ${{ inputs.runner }}
+    runs-on: ubuntu-latest
     steps:
+      # WHY: waiver keys off the PR author login, not github.actor — actor flips
+      # to a maintainer login on "Re-run failed jobs", re-arming the check on bot PRs.
       - name: Pass trusted automation PRs
-        if: ${{ github.actor == 'dependabot[bot]' || github.actor == 'release-please[bot]' }}
-        run: echo "Gate attestation waived for trusted automation actor."
+        if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' || github.event.pull_request.user.login == 'release-please[bot]' }}
+        run: echo "Gate attestation waived for trusted automation PR author ${{ github.event.pull_request.user.login }}."
 
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-        if: ${{ github.actor != 'dependabot[bot]' && github.actor != 'release-please[bot]' }}
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.user.login != 'release-please[bot]' }}
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Verify Gate-Passed trailer
-        if: ${{ github.actor != 'dependabot[bot]' && github.actor != 'release-please[bot]' }}
+        if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.user.login != 'release-please[bot]' }}
         run: |
           commits=$(git log --format="%H" "origin/${{ github.base_ref }}..HEAD")
           if [ -z "$commits" ]; then
             echo "ERROR: No commits found in PR"
             exit 1
           fi
-
           found=false
           for sha in $commits; do
             body=$(git log -1 --format="%b" "$sha")
             if echo "$body" | grep -q "^Gate-Passed:"; then
-              version=$(echo "$body" | grep "^Gate-Passed:" | head -1)
-              echo "Found gate attestation: $version"
+              echo "Found gate attestation: $(echo "$body" | grep '^Gate-Passed:' | head -1)"
               found=true
               break
             fi
           done
-
           if [ "$found" = false ]; then
             echo "ERROR: No Gate-Passed trailer found in any PR commit."
-            echo "Run the local gate and commit with the trailer."
             exit 1
           fi
