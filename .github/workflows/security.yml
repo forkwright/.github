@@ -71,10 +71,12 @@ jobs:
           git config --global credential.helper store
           printf 'https://forkwright:%s@github.com\n' "${FLEET_REPO_TOKEN}" > ~/.git-credentials
           chmod 0600 ~/.git-credentials
+      # WHY: setup-rust-toolchain auto-reads rust-toolchain.toml, so nightly-pinned
+      # repos (theatron) get nightly and stable repos get stable with no input.
+      - uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1.16.1
       - uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2.0.20
         with:
           command: check advisories licenses bans sources
-          arguments: --all-features
           credentials: ${{ inputs.has_private_deps && format('https://forkwright:{0}@github.com', secrets.FLEET_REPO_TOKEN) || '' }}
           use-git-cli: ${{ inputs.has_private_deps }}
 
