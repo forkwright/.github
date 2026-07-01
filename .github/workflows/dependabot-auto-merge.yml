@@ -40,22 +40,27 @@ jobs:
           fi
           failed=0
           # WHY: endswith — reusable-workflow checks are named "caller-job / leaf-job".
+          # Any given leaf satisfies the check: repos report the same verification
+          # under divergent names (kanon inlines "osv scanner"; theatron/aletheia
+          # delegate and report "… osv scanner / osv-scan").
           require_passed_check() {
-            local leaf="$1"
-            local bucket
-            bucket=$(gh pr checks "$PR_URL" --json name,bucket \
-              --jq "[.[] | select(.name | ascii_downcase | endswith(\"$leaf\"))][0].bucket")
-            if [ -z "$bucket" ] || [ "$bucket" = "null" ]; then
-              echo "::error::Required verification check ending '${leaf}' was not reported."; failed=1; return
-            fi
-            if [ "$bucket" != "pass" ]; then
-              echo "::error::Required verification check ending '${leaf}' finished in bucket '${bucket}'."; failed=1
-            fi
+            local bucket leaf
+            for leaf in "$@"; do
+              bucket=$(gh pr checks "$PR_URL" --json name,bucket \
+                --jq "[.[] | select(.name | ascii_downcase | endswith(\"$leaf\"))][0].bucket")
+              if [ -n "$bucket" ] && [ "$bucket" != "null" ]; then
+                if [ "$bucket" = "pass" ]; then
+                  return 0
+                fi
+                echo "::error::Required verification check ending '${leaf}' finished in bucket '${bucket}'."; failed=1; return 0
+              fi
+            done
+            echo "::error::No required verification check ending in any of: $*."; failed=1
           }
           require_passed_check "gate-attestation"
           require_passed_check "cargo deny"
           require_passed_check "cargo audit"
-          require_passed_check "osv scanner"
+          require_passed_check "osv scanner" "osv-scan"
           [ "$failed" -eq 0 ] || { echo "Real verification checks missing/unsuccessful." >&2; exit 1; }
           echo "Required real verification checks passed."
 
