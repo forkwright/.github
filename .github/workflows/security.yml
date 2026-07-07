@@ -96,14 +96,21 @@ jobs:
           git config --global credential.helper store
           printf 'https://forkwright:%s@github.com\n' "${FLEET_REPO_TOKEN}" > ~/.git-credentials
           chmod 0600 ~/.git-credentials
-      # WHY: setup-rust-toolchain auto-reads rust-toolchain.toml, so nightly-pinned
-      # repos (theatron) get nightly and stable repos get stable with no input.
+      # WHY: setup-rust-toolchain auto-reads rust-toolchain.toml so a repo without
+      # a committed Cargo.lock can still generate one for the scan; MSRV-pinned
+      # repos get their pinned rustc, which no longer constrains cargo-audit now
+      # that it is installed as a prebuilt binary below.
       - uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1.16.1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      # WHY: install cargo-audit as a PREBUILT binary, not `cargo install` from
+      # source. A source build couples cargo-audit's climbing MSRV to the target
+      # repo's pinned toolchain and fails both ways on MSRV-pinned repos: 0.22.x
+      # needs rustc >= 1.88 to compile, while 0.21.x bundles a rustsec that cannot
+      # parse the CVSS-4.0 advisories now in the RustSec DB (erroring the whole
+      # scan). Pin the exact version — a DB-format bump is a deliberate, reviewed
+      # change, never an implicit floor. See kanon#2385.
+      - uses: taiki-e/install-action@c93ccc03e00cd0e08e494f5fd058a6c55a6a1907 # v2.82.8
         with:
-          key: cargo-audit
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked --version ^0.22
+          tool: cargo-audit@0.22.2
       - name: cargo audit
         run: cargo audit --deny unmaintained --deny unsound --deny yanked
 
