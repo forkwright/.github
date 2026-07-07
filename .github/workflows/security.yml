@@ -69,7 +69,7 @@ jobs:
           chmod 0600 ~/.git-credentials
       # WHY: setup-rust-toolchain auto-reads rust-toolchain.toml, so nightly-pinned
       # repos (theatron) get nightly and stable repos get stable with no input.
-      - uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1.16.1
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
       - uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2.0.20
         with:
           command: check advisories licenses bans sources
@@ -100,7 +100,7 @@ jobs:
       # a committed Cargo.lock can still generate one for the scan; MSRV-pinned
       # repos get their pinned rustc, which no longer constrains cargo-audit now
       # that it is installed as a prebuilt binary below.
-      - uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1.16.1
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
       # WHY: install cargo-audit as a PREBUILT binary, not `cargo install` from
       # source. A source build couples cargo-audit's climbing MSRV to the target
       # repo's pinned toolchain and fails both ways on MSRV-pinned repos: 0.22.x
