@@ -16,18 +16,28 @@ jobs:
     steps:
       # WHY: waiver keys off the PR author login, not github.actor — actor flips
       # to a maintainer login on "Re-run failed jobs", re-arming the check on bot PRs.
+      # Release-please is ALSO waived branch-shaped: under GITHUB_TOKEN its PRs
+      # are authored as github-actions[bot] (and as the PAT owner once a PAT is
+      # wired) — the author varies, the branch pattern does not. Release-PR
+      # content is generated version bumps; its verification is the live
+      # deny/audit/osv checks.
       - name: Pass trusted automation PRs
-        if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' || github.event.pull_request.user.login == 'release-please[bot]' }}
-        run: echo "Gate attestation waived for trusted automation PR author ${{ github.event.pull_request.user.login }}."
+        if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' || github.event.pull_request.user.login == 'release-please[bot]' || startsWith(github.head_ref, 'release-please--branches--') }}
+        env:
+          # WHY: head_ref is attacker-controlled text — env-var indirection keeps
+          # it out of shell interpolation (actionlint expression rule).
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_HEAD_REF: ${{ github.head_ref }}
+        run: echo "Gate attestation waived for trusted automation PR (author ${PR_AUTHOR}, branch ${PR_HEAD_REF})."
 
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.user.login != 'release-please[bot]' }}
+        if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.user.login != 'release-please[bot]' && !startsWith(github.head_ref, 'release-please--branches--') }}
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Verify Gate-Passed trailer
-        if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.user.login != 'release-please[bot]' }}
+        if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.user.login != 'release-please[bot]' && !startsWith(github.head_ref, 'release-please--branches--') }}
         run: |
           commits=$(git log --format="%H" "origin/${{ github.base_ref }}..HEAD")
           if [ -z "$commits" ]; then
