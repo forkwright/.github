@@ -108,7 +108,7 @@ jobs:
       # parse the CVSS-4.0 advisories now in the RustSec DB (erroring the whole
       # scan). Pin the exact version — a DB-format bump is a deliberate, reviewed
       # change, never an implicit floor. See kanon#2385.
-      - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
+      - uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9 # v2.84.0
         with:
           tool: cargo-audit@0.22.2
       - name: cargo audit
