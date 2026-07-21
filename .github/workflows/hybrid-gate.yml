@@ -109,9 +109,10 @@ on:
         description: >-
           Exempt a docs-only diff from full-gate-build even with no
           Gate-Passed trailer. A PR is docs-only when every changed path
-          matches one of: **.md, docs/**, llms.txt, AGENTS.md, .github/*.md.
-          Default true. Does not affect ai_attribution_check, which still
-          runs on docs-only PRs.
+          matches one of: **.md, docs/**, llms.txt (any nested `*.md` path,
+          e.g. AGENTS.md or .github/CODEOWNERS.md, already matches the
+          first pattern). Default true. Does not affect ai_attribution_check,
+          which still runs on docs-only PRs.
         type: boolean
         required: false
         default: true
@@ -160,6 +161,13 @@ jobs:
         # nested paths (`**.md`) and `docs/*` already covers `docs/**` —
         # no extglob needed. An empty diff (should not happen on a PR) is
         # conservatively treated as NOT docs-only.
+        #
+        # WHY the pattern list is only `*.md|docs/*|llms.txt` (AGENTS.md and
+        # .github/*.md dropped): case-pattern `*` matches `/` too, so `*.md`
+        # already matches both `AGENTS.md` and any `.github/*.md` path —
+        # shellcheck SC2221/SC2222 correctly flags those two alternatives as
+        # dead (always overridden by the earlier `*.md` arm). Removing them
+        # changes no matching behavior, only the redundant spelling.
         env:
           DOCS_ONLY_EXEMPTION: ${{ inputs.docs_only_exemption }}
         run: |
@@ -178,7 +186,7 @@ jobs:
           while IFS= read -r f; do
             [ -z "$f" ] && continue
             case "$f" in
-              *.md|docs/*|llms.txt|AGENTS.md|.github/*.md) ;;
+              *.md|docs/*|llms.txt) ;;
               *)
                 docs_only=false
                 ;;
