@@ -1,0 +1,447 @@
+# WHY(kanon#2522): trailer-only gate-attestation hard-sticks off-slot PRs (no
+# local `kanon gate --stamp` means no way to ever produce a passing required
+# check). This is the hybrid mechanism aletheia#6426 proved: a Gate-Passed
+# trailer takes a fast trailer-verify path; a trailer-less PR falls through to
+# a real CI build of the same stages the trailer would have attested. A single
+# `gate` job aggregates both paths into the one required check branch
+# protection points at. All gate logic lives here — one fact, one place;
+# callers only supply the commands and flags that vary per repo.
+#
+# WHY hosted in forkwright/.github, not forkwright/kanon: GitHub cannot
+# resolve a `workflow_call` reusable workflow reference into a repo that is
+# PRIVATE and owned by a personal (non-organization) account — every caller
+# in a separate repo fails to even schedule the workflow (no run appears at
+# all, not even a failed one). Proven empirically: all four initial adoption
+# PRs (aletheia#6438, koinon#15, heurema#9, sphragis#13), each pointed at
+# `forkwright/kanon/.github/workflows/hybrid-gate.yml@main`, failed atomically
+# this way. The OLD trailer-only reusable already lived here and is called
+# successfully by 8 repos — proof the public `.github` host resolves fine.
+# This file is logically kanon-owned (kanon#2522 designs and maintains the
+# mechanism); `.github` is the interim public home a private-repo caller
+# structural limit requires. It moves back to kanon if/when kanon goes
+# public.
+name: Hybrid Gate (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      rust_toolchain:
+        description: >-
+          Rust toolchain channel to install (e.g. "1.89", "stable"). Leave
+          empty (default) to auto-detect from the caller repo's own
+          rust-toolchain.toml/rust-toolchain file via
+          actions-rust-lang/setup-rust-toolchain — this is the fleet
+          convention (see forkwright/harmonia CLAUDE.md: "Toolchain comes from
+          rust-toolchain.toml, never workflow inputs"). Only set this input
+          for a repo with no toolchain file of its own.
+        type: string
+        required: false
+        default: ""
+      system_packages:
+        description: >-
+          Space-separated apt package list to install via apt-get before
+          check/clippy/nextest (e.g. "libasound2-dev pkg-config"). Empty
+          (default) skips the install step entirely.
+        type: string
+        required: false
+        default: ""
+      fmt_cmd:
+        description: The exact fmt-check command.
+        type: string
+        required: false
+        default: "cargo fmt --all -- --check"
+      check_cmd:
+        description: The exact compile-check command.
+        type: string
+        required: false
+        default: "cargo check --workspace --all-targets"
+      clippy_cmd:
+        description: The exact clippy command.
+        type: string
+        required: false
+        default: "cargo clippy --workspace --all-targets -- -D warnings"
+      nextest_cmd:
+        description: The exact nextest invocation.
+        type: string
+        required: false
+        default: "cargo nextest run --workspace"
+      doctest_cmd:
+        description: >-
+          Optional separate doctest command (nextest does not execute
+          doctests). Empty (default) skips this step. Set to e.g.
+          "cargo test --workspace --doc" for a repo whose gate attests
+          doctests too.
+        type: string
+        required: false
+        default: ""
+      needs_fleet_repo_token:
+        description: >-
+          Set true only when this repo's Cargo.toml resolves a git
+          dependency that needs authenticated fetch (private fleet repo, or a
+          public fleet repo where anonymous git-fetch rate limits have caused
+          flakiness). Gates the git-credential step and the FLEET_REPO_TOKEN
+          secret requirement; false skips both entirely so repos with no such
+          dependency never need the secret wired.
+        type: boolean
+        required: false
+        default: false
+      rust_cache_key:
+        description: Swatinem/rust-cache cache key discriminator.
+        type: string
+        required: false
+        default: "gate-attestation"
+      full_gate_timeout_minutes:
+        description: Timeout for the full-gate-build job.
+        type: number
+        required: false
+        default: 45
+      ai_attribution_check:
+        description: >-
+          Run the fleet AI-attribution check (greps PR title/body and the
+          PR-range commit messages for co-authored-by/generated-with/robot
+          markers naming an AI tool). Default true. Bot/release-please PRs
+          are waived the same as the trailer check. Set false only for a
+          repo that has explicitly decided not to enforce this yet.
+        type: boolean
+        required: false
+        default: true
+      docs_only_exemption:
+        description: >-
+          Exempt a docs-only diff from full-gate-build even with no
+          Gate-Passed trailer. A PR is docs-only when every changed path
+          matches one of: **.md, docs/**, llms.txt, AGENTS.md, .github/*.md.
+          Default true. Does not affect ai_attribution_check, which still
+          runs on docs-only PRs.
+        type: boolean
+        required: false
+        default: true
+    secrets:
+      FLEET_REPO_TOKEN:
+        description: >-
+          Token for git-credential access to private/rate-limited fleet
+          deps. Required only when needs_fleet_repo_token is true.
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+# WHY: concurrency lives on the reusable workflow (not the thin callers) so it
+# is defined once; keyed by the CALLER's workflow + ref (both resolve to the
+# caller's context in a reusable call) and repo-scoped, so each adopting repo
+# cancels only its own superseded PR runs. Callers must NOT also set a
+# concurrency group with this key, or the shared group self-cancels.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-trailer:
+    name: check-trailer
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      found: ${{ steps.trailer.outputs.found }}
+      docs_only: ${{ steps.docs-only.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check for docs-only changeset
+        id: docs-only
+        # WHY: gated by docs_only_exemption so a repo can opt out entirely
+        # (docs_only stays false, full-gate-build always runs). Path patterns
+        # mirror kanon's own gate-attestation.yml doc-only exemption:
+        # bash case globs match `/` inside `*`, so `*.md` already covers
+        # nested paths (`**.md`) and `docs/*` already covers `docs/**` —
+        # no extglob needed. An empty diff (should not happen on a PR) is
+        # conservatively treated as NOT docs-only.
+        env:
+          DOCS_ONLY_EXEMPTION: ${{ inputs.docs_only_exemption }}
+        run: |
+          if [ "$DOCS_ONLY_EXEMPTION" != "true" ]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          changed=$(git diff --name-only "origin/${{ github.base_ref }}..HEAD")
+          if [ -z "$changed" ]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          docs_only=true
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              *.md|docs/*|llms.txt|AGENTS.md|.github/*.md) ;;
+              *)
+                docs_only=false
+                ;;
+            esac
+          done <<< "$changed"
+
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+          if [ "$docs_only" = true ]; then
+            echo "Docs-only changeset (all paths match **.md/docs/**/llms.txt/AGENTS.md/.github/*.md):"
+            printf '%s\n' "$changed" | sed 's/^/  doc: /'
+          fi
+
+      - name: Check for Gate-Passed trailer
+        id: trailer
+        # WHY: waiver keys off the PR author login, not github.actor — actor
+        # flips to a maintainer login on "Re-run failed jobs", re-arming the
+        # check on bot PRs. Release-please is waived branch-shaped: under
+        # GITHUB_TOKEN (and a future PAT) its PRs are authored inconsistently,
+        # but the branch pattern is stable. A trailer NOT found is a normal
+        # outcome routed to full-gate-build — this step never exits 1.
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_HEAD_REF: ${{ github.head_ref }}
+        run: |
+          if [ "$PR_AUTHOR" = "dependabot[bot]" ] || [ "$PR_AUTHOR" = "release-please[bot]" ] || [[ "$PR_HEAD_REF" == release-please--branches--* ]]; then
+            echo "Gate attestation waived for trusted automation PR (author ${PR_AUTHOR}, branch ${PR_HEAD_REF})."
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          commits=$(git log --format="%H" "origin/${{ github.base_ref }}..HEAD")
+          found=false
+          for sha in $commits; do
+            body=$(git log -1 --format="%b" "$sha")
+            if echo "$body" | grep -q "^Gate-Passed:"; then
+              echo "Found gate attestation: $(echo "$body" | grep '^Gate-Passed:' | head -1)"
+              found=true
+              break
+            fi
+          done
+
+          echo "found=$found" >> "$GITHUB_OUTPUT"
+          if [ "$found" = false ]; then
+            echo "No Gate-Passed trailer found; routing to full-gate-build."
+          fi
+
+  full-gate-build:
+    name: full-gate-build
+    needs: check-trailer
+    if: needs.check-trailer.outputs.found != 'true' && needs.check-trailer.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.full_gate_timeout_minutes }}
+    env:
+      # WHY: full debuginfo is the bulk of the dev-profile target dir; with a
+      # cold cargo cache the workspace test build can exceed the hosted
+      # runner's free disk (ENOSPC killed aletheia's gate mid-nextest,
+      # 2026-06-11). Line tables keep usable backtraces at a fraction of size.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # WHY: hosted runners ship ~25 GB of toolchains this job never uses
+      # (dotnet, Android, GHC, CodeQL bundles). The workspace test build needs
+      # that headroom when the cargo cache is cold. Harmless on every repo
+      # regardless of size, so this runs unconditionally rather than behind
+      # an input.
+      - name: Reclaim runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
+          echo "free disk after reclaim:"
+          df -h / | tail -1
+
+      # WHY: empty toolchain input is deliberate — actions-rust-lang/setup-rust-toolchain
+      # auto-detects from the caller repo's own rust-toolchain.toml when no
+      # explicit `toolchain:` override is given, keeping the toolchain pin
+      # single-sourced in the file each repo already carries (never
+      # duplicated into this workflow's inputs unless a repo has no such
+      # file).
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        with:
+          toolchain: ${{ inputs.rust_toolchain }}
+          components: rustfmt, clippy
+          cache: false
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: ${{ inputs.rust_cache_key }}
+
+      - name: Install system dependencies
+        if: inputs.system_packages != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ${{ inputs.system_packages }}
+
+      - name: Configure git credentials for fleet deps
+        if: inputs.needs_fleet_repo_token
+        env:
+          FLEET_REPO_TOKEN: ${{ secrets.FLEET_REPO_TOKEN }}
+        run: |
+          if [ -z "${FLEET_REPO_TOKEN}" ]; then
+            echo "FLEET_REPO_TOKEN is not set; fleet git deps will fail to fetch." >&2
+            exit 1
+          fi
+          git config --global credential.helper store
+          printf 'https://forkwright:%s@github.com\n' "${FLEET_REPO_TOKEN}" > ~/.git-credentials
+          chmod 0600 ~/.git-credentials
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
+        with:
+          tool: nextest
+
+      # WHY: these steps are the exact stages this repo's local gate attests
+      # (fmt, check, clippy, nextest[, doctest]) — a Gate-Passed trailer and a
+      # green full-gate-build must mean the same thing. The caller owns the
+      # exact command strings; do not hardcode a repo's flags/features here.
+      - name: fmt
+        run: ${{ inputs.fmt_cmd }}
+
+      - name: check
+        run: ${{ inputs.check_cmd }}
+
+      - name: clippy
+        run: ${{ inputs.clippy_cmd }}
+
+      - name: nextest
+        run: ${{ inputs.nextest_cmd }}
+
+      - name: doctest
+        if: inputs.doctest_cmd != ''
+        run: ${{ inputs.doctest_cmd }}
+
+      - name: Upload nextest failure artifacts
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nextest-gate-attestation
+          path: |
+            target/nextest/**/junit.xml
+            target/nextest/**/*.log
+          if-no-files-found: warn
+
+  ai-attribution:
+    name: ai-attribution
+    if: inputs.ai_attribution_check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify no AI attribution
+        # WHY: lifted verbatim from kanon's own gate-attestation.yml (and
+        # harmonia's inline copy) — one implementation, centralized. Waivers
+        # match check-trailer's: PR-author-shaped for dependabot, branch-shaped
+        # for release-please (its author varies: github-actions[bot] under
+        # GITHUB_TOKEN today, a future PAT owner post kanon#1092 — the branch
+        # pattern is what stays stable). Runs regardless of docs_only_exemption
+        # — a docs-only PR still carries its own title/body/commits and must
+        # not smuggle an attribution marker through the build exemption.
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_HEAD_REF: ${{ github.head_ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          case "$PR_HEAD_REF" in
+            release-please--branches--*)
+              echo "Release-please branch ($PR_HEAD_REF): AI attribution check exempt."
+              exit 0
+              ;;
+          esac
+          if [ "$PR_AUTHOR" = "dependabot[bot]" ]; then
+            echo "Trusted bot PR author: $PR_AUTHOR"
+            echo "AI attribution check auto-passed for trusted bot PR."
+            exit 0
+          fi
+
+          # WHY line-anchored: PR bodies may legitimately discuss the policy in
+          # prose (e.g. quoting "Co-authored-by: Claude …"). Only trailer-shaped
+          # lines and explicit generated-with/robot markers are enforcement targets.
+          pattern='^(co-authored-by:.*(claude|gpt|codex|kimi|gemini|anthropic)|🤖|generated with)'
+          violation=0
+
+          title_hits=$(printf '%s\n' "$PR_TITLE" | grep -inE "$pattern" || true)
+          if [ -n "$title_hits" ]; then
+            echo "ERROR: AI attribution marker found in PR title."
+            printf '%s\n' "$title_hits" | sed 's/^/  title: /'
+            violation=1
+          fi
+
+          # Guard null/empty PR body so the step does not crash; grep on an empty
+          # string simply returns no matches, but the explicit || true makes the
+          # intent obvious and protects against unexpected GitHub env quirks.
+          body_hits=$(printf '%s\n' "$PR_BODY" | grep -inE "$pattern" || true)
+          if [ -n "$body_hits" ]; then
+            echo "ERROR: AI attribution marker found in PR body."
+            printf '%s\n' "$body_hits" | sed 's/^/  body: /'
+            violation=1
+          fi
+
+          commit_hits=$(git log --format="%s%n%b" "origin/${{ github.base_ref }}..HEAD" | grep -inE "$pattern" || true)
+          if [ -n "$commit_hits" ]; then
+            echo "ERROR: AI attribution marker found in PR-range commits."
+            printf '%s\n' "$commit_hits" | sed 's/^/  commit: /'
+            violation=1
+          fi
+
+          if [ "$violation" -ne 0 ]; then
+            echo "Remove AI attribution markers (Co-authored-by AI, 🤖, 'generated with') from the PR title, body, and commits."
+            exit 1
+          fi
+
+  gate:
+    name: gate
+    needs: [check-trailer, full-gate-build, ai-attribution]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Evaluate gate result
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_HEAD_REF: ${{ github.head_ref }}
+          TRAILER_FOUND: ${{ needs.check-trailer.outputs.found }}
+          DOCS_ONLY: ${{ needs.check-trailer.outputs.docs_only }}
+          BUILD_RESULT: ${{ needs.full-gate-build.result }}
+          ATTRIBUTION_RESULT: ${{ needs.ai-attribution.result }}
+        run: |
+          if [ "$PR_AUTHOR" = "dependabot[bot]" ] || [ "$PR_AUTHOR" = "release-please[bot]" ] || [[ "$PR_HEAD_REF" == release-please--branches--* ]]; then
+            echo "Gate attestation waived for trusted automation PR (author ${PR_AUTHOR}, branch ${PR_HEAD_REF})."
+            exit 0
+          fi
+
+          # WHY checked first, unconditionally: an attribution violation must
+          # block the gate even on a trailer-stamped or docs-only PR — neither
+          # of the exemptions below are about attribution, only about whether
+          # a full rebuild is necessary.
+          if [ "$ATTRIBUTION_RESULT" = "failure" ] || [ "$ATTRIBUTION_RESULT" = "cancelled" ]; then
+            echo "ERROR: ai-attribution check did not pass (result: ${ATTRIBUTION_RESULT})." >&2
+            exit 1
+          fi
+
+          if [ "$TRAILER_FOUND" = "true" ]; then
+            echo "Gate-Passed trailer verified."
+            exit 0
+          fi
+
+          if [ "$DOCS_ONLY" = "true" ]; then
+            echo "Docs-only changeset: full-gate-build exempt."
+            exit 0
+          fi
+
+          if [ "$BUILD_RESULT" = "success" ]; then
+            echo "full-gate-build passed."
+            exit 0
+          fi
+
+          echo "ERROR: no Gate-Passed trailer, not a docs-only changeset, and full-gate-build did not succeed (result: ${BUILD_RESULT})." >&2
+          exit 1
