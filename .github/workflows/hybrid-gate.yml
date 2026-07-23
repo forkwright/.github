@@ -201,22 +201,16 @@ jobs:
 
       - name: Check for Gate-Passed trailer
         id: trailer
-        # WHY: waiver keys off the PR author login, not github.actor — actor
-        # flips to a maintainer login on "Re-run failed jobs", re-arming the
-        # check on bot PRs. Release-please is waived branch-shaped: under
-        # GITHUB_TOKEN (and a future PAT) its PRs are authored inconsistently,
-        # but the branch pattern is stable. A trailer NOT found is a normal
-        # outcome routed to full-gate-build — this step never exits 1.
-        env:
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          PR_HEAD_REF: ${{ github.head_ref }}
+        # WHY: automation PRs (dependabot, release-please) carry no
+        # Gate-Passed trailer by nature — and that must route them to
+        # full-gate-build like any other untrailered PR, never exempt the
+        # build itself. A trailer waiver here once set found=true for bot
+        # authors, which skipped full-gate-build entirely and let two
+        # dependabot majors merge with red compiles (lockfile-only diffs
+        # are the changesets MOST in need of a compile). A trailer NOT
+        # found is a normal outcome routed to full-gate-build — this step
+        # never exits 1.
         run: |
-          if [ "$PR_AUTHOR" = "dependabot[bot]" ] || [ "$PR_AUTHOR" = "release-please[bot]" ] || [[ "$PR_HEAD_REF" == release-please--branches--* ]]; then
-            echo "Gate attestation waived for trusted automation PR (author ${PR_AUTHOR}, branch ${PR_HEAD_REF})."
-            echo "found=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
           commits=$(git log --format="%H" "origin/${{ github.base_ref }}..HEAD")
           found=false
           for sha in $commits; do
@@ -415,17 +409,16 @@ jobs:
     steps:
       - name: Evaluate gate result
         env:
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          PR_HEAD_REF: ${{ github.head_ref }}
           TRAILER_FOUND: ${{ needs.check-trailer.outputs.found }}
           DOCS_ONLY: ${{ needs.check-trailer.outputs.docs_only }}
           BUILD_RESULT: ${{ needs.full-gate-build.result }}
           ATTRIBUTION_RESULT: ${{ needs.ai-attribution.result }}
         run: |
-          if [ "$PR_AUTHOR" = "dependabot[bot]" ] || [ "$PR_AUTHOR" = "release-please[bot]" ] || [[ "$PR_HEAD_REF" == release-please--branches--* ]]; then
-            echo "Gate attestation waived for trusted automation PR (author ${PR_AUTHOR}, branch ${PR_HEAD_REF})."
-            exit 0
-          fi
+          # WHY there is no automation-author waiver here: bot PRs
+          # (dependabot, release-please) pass the same ladder as everyone —
+          # no trailer means BUILD_RESULT must be success. An author-keyed
+          # early exit here once passed the gate before reading the build
+          # result, merging red dependabot majors.
 
           # WHY checked first, unconditionally: an attribution violation must
           # block the gate even on a trailer-stamped or docs-only PR — neither
