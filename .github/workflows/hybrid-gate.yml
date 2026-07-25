@@ -210,22 +210,21 @@ jobs:
         # are the changesets MOST in need of a compile). A trailer NOT
         # found is a normal outcome routed to full-gate-build — this step
         # never exits 1.
+        # WHY (#2399): bind to the PR TIP, not "any PR commit" — an un-stamped
+        # tip must not ride an ancestor's trailer to skip full-gate-build.
+        env:
+          # WHY: head.sha reaches the script via env, not shell interpolation.
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          commits=$(git log --format="%H" "origin/${{ github.base_ref }}..HEAD")
-          found=false
-          for sha in $commits; do
-            body=$(git log -1 --format="%b" "$sha")
-            if echo "$body" | grep -q "^Gate-Passed:"; then
-              echo "Found gate attestation: $(echo "$body" | grep '^Gate-Passed:' | head -1)"
-              found=true
-              break
-            fi
-          done
-
-          echo "found=$found" >> "$GITHUB_OUTPUT"
-          if [ "$found" = false ]; then
-            echo "No Gate-Passed trailer found; routing to full-gate-build."
+          body=$(git log -1 --format="%b" "$PR_HEAD_SHA")
+          if echo "$body" | grep -q "^Gate-Passed:"; then
+            echo "Found gate attestation on PR tip: $(echo "$body" | grep '^Gate-Passed:' | head -1)"
+            found=true
+          else
+            found=false
+            echo "PR tip carries no Gate-Passed trailer (ancestors do not count — #2399); routing to full-gate-build."
           fi
+          echo "found=$found" >> "$GITHUB_OUTPUT"
 
   full-gate-build:
     name: full-gate-build

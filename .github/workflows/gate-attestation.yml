@@ -38,22 +38,19 @@ jobs:
 
       - name: Verify Gate-Passed trailer
         if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.user.login != 'release-please[bot]' && !startsWith(github.head_ref, 'release-please--branches--') }}
+        # WHY (#2399): bind to the PR TIP, not "any PR commit". The old loop
+        # passed if any ancestor carried a Gate-Passed trailer, so an un-stamped
+        # tip could ride an earlier commit's attestation — a false green on the
+        # actually-merged tree.
+        env:
+          # WHY: head.sha reaches the script via env, not shell interpolation
+          # (expression-injection rule). It is server-populated + content-addressed.
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          commits=$(git log --format="%H" "origin/${{ github.base_ref }}..HEAD")
-          if [ -z "$commits" ]; then
-            echo "ERROR: No commits found in PR"
-            exit 1
-          fi
-          found=false
-          for sha in $commits; do
-            body=$(git log -1 --format="%b" "$sha")
-            if echo "$body" | grep -q "^Gate-Passed:"; then
-              echo "Found gate attestation: $(echo "$body" | grep '^Gate-Passed:' | head -1)"
-              found=true
-              break
-            fi
-          done
-          if [ "$found" = false ]; then
-            echo "ERROR: No Gate-Passed trailer found in any PR commit."
+          body=$(git log -1 --format="%b" "$PR_HEAD_SHA")
+          if echo "$body" | grep -q "^Gate-Passed:"; then
+            echo "Found gate attestation on PR tip: $(echo "$body" | grep '^Gate-Passed:' | head -1)"
+          else
+            echo "ERROR: PR tip carries no Gate-Passed trailer (ancestors' trailers do not count — #2399)."
             exit 1
           fi
