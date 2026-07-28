@@ -170,13 +170,32 @@ jobs:
         # changes no matching behavior, only the redundant spelling.
         env:
           DOCS_ONLY_EXEMPTION: ${{ inputs.docs_only_exemption }}
+          BASE_REF: ${{ github.base_ref }}
+          EVENT_BEFORE: ${{ github.event.before }}
         run: |
           if [ "$DOCS_ONLY_EXEMPTION" != "true" ]; then
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          changed=$(git diff --name-only "origin/${{ github.base_ref }}..HEAD")
+          # WHY: github.base_ref is populated for pull_request events only. On a push it is
+          # empty, which produced the literal ref `origin/..HEAD` and killed this step with
+          # `fatal: ambiguous argument` — every push to a default branch failed the gate.
+          # Derive the range from whichever event actually fired. EVENT_BEFORE is all-zeros
+          # on a branch's first push and may be absent from a shallow fetch, so fall back to
+          # the head commit alone rather than assuming it resolves.
+          if [ -n "$BASE_REF" ]; then
+            range="origin/${BASE_REF}..HEAD"
+          elif [ -n "$EVENT_BEFORE" ] \
+            && git rev-parse --verify --quiet "${EVENT_BEFORE}^{commit}" >/dev/null 2>&1; then
+            range="${EVENT_BEFORE}..HEAD"
+          elif git rev-parse --verify --quiet 'HEAD~1^{commit}' >/dev/null 2>&1; then
+            range="HEAD~1..HEAD"
+          else
+            range="HEAD"
+          fi
+
+          changed=$(git diff --name-only "$range")
           if [ -z "$changed" ]; then
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -351,6 +370,8 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
           PR_HEAD_REF: ${{ github.head_ref }}
           PR_TITLE: ${{ github.event.pull_request.title }}
+          BASE_REF: ${{ github.base_ref }}
+          EVENT_BEFORE: ${{ github.event.before }}
         run: |
           case "$PR_HEAD_REF" in
             release-please--branches--*)
@@ -387,7 +408,22 @@ jobs:
             violation=1
           fi
 
-          commit_hits=$(git log --format="%s%n%b" "origin/${{ github.base_ref }}..HEAD" | grep -inE "$pattern" || true)
+          # WHY: same event-shape hazard as the docs-only step — github.base_ref is
+          # pull_request-only, so on a push this interpolated to `origin/..HEAD` and aborted
+          # the step. Scanning must still happen on a push: that is exactly when an
+          # attribution marker would land on the default branch unreviewed.
+          if [ -n "$BASE_REF" ]; then
+            commit_range="origin/${BASE_REF}..HEAD"
+          elif [ -n "$EVENT_BEFORE" ] \
+            && git rev-parse --verify --quiet "${EVENT_BEFORE}^{commit}" >/dev/null 2>&1; then
+            commit_range="${EVENT_BEFORE}..HEAD"
+          elif git rev-parse --verify --quiet 'HEAD~1^{commit}' >/dev/null 2>&1; then
+            commit_range="HEAD~1..HEAD"
+          else
+            commit_range="HEAD"
+          fi
+
+          commit_hits=$(git log --format="%s%n%b" "$commit_range" | grep -inE "$pattern" || true)
           if [ -n "$commit_hits" ]; then
             echo "ERROR: AI attribution marker found in PR-range commits."
             printf '%s\n' "$commit_hits" | sed 's/^/  commit: /'
