@@ -6,6 +6,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/**"
+      - "scripts/**"
 
 permissions:
   contents: read
@@ -32,3 +33,19 @@ jobs:
           chmod +x actionlint
       - name: Run actionlint
         run: ./actionlint -color .github/workflows/*.yml
+
+  event-shape-guards:
+    name: event-shape-guards
+    # WHY: actionlint type-checks expressions but cannot see that a
+    # pull_request-only context is empty on a push, which is the one class of
+    # defect that has shipped from this repo twice (#25 and the check-trailer
+    # step it missed). Runs beside actionlint because both answer "is this
+    # workflow correct before 11 repos inherit it".
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check pull_request-only values reaching git
+        run: python3 scripts/check_event_shape_guards.py .github/workflows

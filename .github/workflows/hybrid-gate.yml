@@ -233,15 +233,23 @@ jobs:
         # tip must not ride an ancestor's trailer to skip full-gate-build.
         env:
           # WHY: head.sha reaches the script via env, not shell interpolation.
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # WHY the fallback: github.event.pull_request.head.sha is populated on
+          # pull_request events only. On a push it is the empty string, and
+          # `git log -1 --format="%b" ""` exits 128 with
+          # `fatal: ambiguous argument ''` — the same event-shape hazard #25
+          # fixed in the docs-only and ai-attribution steps below, which this
+          # step was missed by, so every push to a caller's default branch still
+          # failed this job. github.sha is the pushed commit, so #2399's
+          # tip-binding is preserved under both event shapes.
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           body=$(git log -1 --format="%b" "$PR_HEAD_SHA")
           if echo "$body" | grep -q "^Gate-Passed:"; then
-            echo "Found gate attestation on PR tip: $(echo "$body" | grep '^Gate-Passed:' | head -1)"
+            echo "Found gate attestation on tip $PR_HEAD_SHA: $(echo "$body" | grep '^Gate-Passed:' | head -1)"
             found=true
           else
             found=false
-            echo "PR tip carries no Gate-Passed trailer (ancestors do not count — #2399); routing to full-gate-build."
+            echo "Tip $PR_HEAD_SHA carries no Gate-Passed trailer (ancestors do not count — #2399); routing to full-gate-build."
           fi
           echo "found=$found" >> "$GITHUB_OUTPUT"
 

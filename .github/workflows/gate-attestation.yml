@@ -45,7 +45,16 @@ jobs:
         env:
           # WHY: head.sha reaches the script via env, not shell interpolation
           # (expression-injection rule). It is server-populated + content-addressed.
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # WHY the fallback: the context is populated on pull_request events
+          # only, and `git log -1 --format="%b" ""` exits 128 with
+          # `fatal: ambiguous argument ''`, so a caller triggering this reusable
+          # on a push got an unreadable git crash instead of a verdict.
+          # WARNING: this reusable has no full-gate-build fallback, so a
+          # push-triggered run can only ever go red — the fleet squash-message
+          # setting is PR_BODY, so no commit on a default branch carries a
+          # trailer. Callers wanting default-branch coverage call hybrid-gate.yml,
+          # which routes an untrailered tip to a real build instead.
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           body=$(git log -1 --format="%b" "$PR_HEAD_SHA")
           if echo "$body" | grep -q "^Gate-Passed:"; then
