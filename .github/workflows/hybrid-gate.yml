@@ -235,9 +235,17 @@ jobs:
           # WHY: head.sha reaches the script via env, not shell interpolation.
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          body=$(git log -1 --format="%b" "$PR_HEAD_SHA")
+          # WHY the fallback: github.event.pull_request.* is populated on
+          # pull_request events ONLY. On a push, PR_HEAD_SHA is empty and
+          # `git log -1 --format=%b ""` dies with exit 128, which crashes this
+          # step before it writes `found` and fails the whole gate — the same
+          # event-shape hazard the docs-only and ai-attribution steps above
+          # already guard with their own fallback chains. On a push, HEAD IS
+          # the tip, so #2399's tip-binding property is preserved either way.
+          tip="${PR_HEAD_SHA:-HEAD}"
+          body=$(git log -1 --format="%b" "$tip")
           if echo "$body" | grep -q "^Gate-Passed:"; then
-            echo "Found gate attestation on PR tip: $(echo "$body" | grep '^Gate-Passed:' | head -1)"
+            echo "Found gate attestation on tip ($tip): $(echo "$body" | grep '^Gate-Passed:' | head -1)"
             found=true
           else
             found=false
