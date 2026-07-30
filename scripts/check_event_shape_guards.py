@@ -20,7 +20,12 @@ fleet-wide, none of them defects, and a check that cannot pass teaches its
 readers to skim past it.
 
 A site is compliant when the expression carries a `||` fallback, or the step's
-`run:` script tests the variable for emptiness before using it.
+`run:` script guards the variable before using it -- either an explicit `[ -n ]`
+/ `[ -z ]` test or a `${NAME:-fallback}` default expansion.
+
+The value is tracked through intermediate assignments: `tip="$PR_HEAD_SHA"`
+followed by `git log "$tip"` is reported, because one level of aliasing hides
+the site without fixing it.
 """
 
 from __future__ import annotations
@@ -107,10 +112,47 @@ def step_spans(lines: list[str]) -> list[tuple[int, int]]:
 
 def guards_emptiness(body: str, name: str) -> bool:
     """True when `body` tests `$name` for being set or empty before use."""
-    guard = re.compile(
+    test_guard = re.compile(
         r"""\[\[?\s+-[nz]\s+"?\$\{?""" + re.escape(name) + r"""\}?"?\s+\]\]?"""
     )
-    return bool(guard.search(body))
+    # WHY: `${NAME:-fallback}` and `${NAME:=fallback}` substitute the fallback
+    # when NAME is empty, so they resolve the empty-string hazard as completely
+    # as an explicit `[ -n ]` test. Treating them as unguarded would fire on the
+    # fix in hybrid-gate.yml's own check-trailer step, and a guard that rejects
+    # a correct repair teaches its readers to work around it.
+    default_guard = re.compile(
+        r"\$\{" + re.escape(name) + r":[-=][^}]*\}"
+    )
+    return bool(test_guard.search(body) or default_guard.search(body))
+
+
+def tainted_names(body: str, name: str) -> set[str]:
+    """Return `name` plus every shell variable assigned from it unguarded.
+
+    WHY: the value routinely reaches git through an intermediate — `tip="$PR_HEAD_SHA"`
+    then `git log "$tip"`. Matching only the original name reports that site clean,
+    which is the exact defect class this guard exists to catch escaping through one
+    assignment. A guarded assignment is not followed: it is handled by
+    `guards_emptiness`, which marks the whole site compliant before this runs.
+    """
+    tainted = {name}
+    # WHY: fixpoint rather than one hop, so an alias of an alias cannot hide the
+    # site either. The set is bounded by the assignments in a single step.
+    while True:
+        alias_pattern = re.compile(
+            r"^\s*(?P<alias>[A-Za-z_][A-Za-z0-9_]*)="
+            r"""["']?\$\{?(?P<src>[A-Za-z_][A-Za-z0-9_]*)\}?["']?\s*$"""
+        )
+        grown = False
+        for line in body.splitlines():
+            match = alias_pattern.match(line)
+            if match is None:
+                continue
+            if match.group("src") in tainted and match.group("alias") not in tainted:
+                tainted.add(match.group("alias"))
+                grown = True
+        if not grown:
+            return tainted
 
 
 def check_file(path: Path) -> tuple[list[Finding], int]:
@@ -126,7 +168,11 @@ def check_file(path: Path) -> tuple[list[Finding], int]:
             examined += 1
             if "||" in expression or guards_emptiness(body, name):
                 continue
-            reference = re.compile(r"\$\{?" + re.escape(name) + r"\}?\b")
+            reference = re.compile(
+                r"\$\{?(?:"
+                + "|".join(re.escape(alias) for alias in sorted(tainted_names(body, name)))
+                + r")\}?\b"
+            )
             for offset, line in enumerate(lines[start:end]):
                 if GIT_COMMAND.search(line) and reference.search(line):
                     findings.append(
