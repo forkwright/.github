@@ -49,11 +49,13 @@ jobs:
           # only, and `git log -1 --format="%b" ""` exits 128 with
           # `fatal: ambiguous argument ''`, so a caller triggering this reusable
           # on a push got an unreadable git crash instead of a verdict.
-          # WARNING: this reusable has no full-gate-build fallback, so a
-          # push-triggered run can only ever go red — the fleet squash-message
-          # setting is PR_BODY, so no commit on a default branch carries a
-          # trailer. Callers wanting default-branch coverage call hybrid-gate.yml,
-          # which routes an untrailered tip to a real build instead.
+          # WARNING: the fallback makes a push-triggered run legible, not green.
+          # This reusable has no full-gate-build fallback, so it fails whenever
+          # the pushed commit carries no trailer — and squash-merged commits
+          # usually do not: measured across the six hybrid callers, 0 of the last
+          # 20 commits on main carry one in five of them (4 of 20 in zetesis).
+          # Callers wanting default-branch coverage call hybrid-gate.yml, which
+          # routes an untrailered tip to a real build instead.
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           body=$(git log -1 --format="%b" "$PR_HEAD_SHA")

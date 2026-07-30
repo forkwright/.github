@@ -41,6 +41,11 @@ jobs:
     # defect that has shipped from this repo twice (#25 and the check-trailer
     # step it missed). Runs beside actionlint because both answer "is this
     # workflow correct before 11 repos inherit it".
+    #
+    # WARNING: this workflow is path-filtered, so it does not run on every PR.
+    # Do not add either job to required status checks without dropping the
+    # `paths:` filter first — a required check that never runs blocks its PR
+    # permanently, with nothing failing and nothing pending to point at.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
