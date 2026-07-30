@@ -56,9 +56,9 @@ class Finding:
     def __str__(self) -> str:
         return (
             f"{self.path}:{self.line}: `{self.name}` interpolates a "
-            f"pull_request-only context with no `||` fallback, and reaches git "
+            "pull_request-only context with no `||` fallback, and reaches git "
             f"with no emptiness test: `{self.git_line}`. On a push event this "
-            f"aborts with `fatal: ambiguous argument ''`."
+            "aborts with `fatal: ambiguous argument ''`."
         )
 
 
