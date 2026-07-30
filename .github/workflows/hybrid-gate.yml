@@ -310,9 +310,22 @@ jobs:
         env:
           FLEET_REPO_TOKEN: ${{ secrets.FLEET_REPO_TOKEN }}
         run: |
+          # WHY an absent token warns instead of failing: Dependabot-triggered
+          # runs read a SEPARATE secret store and receive no Actions secrets, so
+          # this secret is always empty for them. Exiting 1 here therefore made
+          # full-gate-build unpassable for every Dependabot PR in every caller
+          # that sets needs_fleet_repo_token — the exact "hard-sticks off-slot
+          # PRs" failure this workflow was built to end (see the header WHY).
+          # An absent token is not evidence the fetch will fail: every current
+          # forkwright git dep is public and pinned to an immutable tag, so it
+          # resolves anonymously. If a private dep is ever added, the fetch
+          # fails at the fetch with git's own auth error, which is the accurate
+          # place and message. aletheia reached this conclusion first and
+          # carries it in .github/actions/fleet-git-credentials; this brings the
+          # reusable in line with the repo the reusable was modeled on.
           if [ -z "${FLEET_REPO_TOKEN}" ]; then
-            echo "FLEET_REPO_TOKEN is not set; fleet git deps will fail to fetch." >&2
-            exit 1
+            echo "::warning::FLEET_REPO_TOKEN is not set; skipping credential setup. Public fleet deps fetch anonymously; a private dep will fail at fetch time with git's own auth error."
+            exit 0
           fi
           git config --global credential.helper store
           printf 'https://forkwright:%s@github.com\n' "${FLEET_REPO_TOKEN}" > ~/.git-credentials
