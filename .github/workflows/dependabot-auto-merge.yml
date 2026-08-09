@@ -57,7 +57,7 @@ jobs:
             done
             echo "::error::No required verification check ending in any of: $*."; failed=1
           }
-          require_passed_check "gate-attestation"
+          require_passed_check "gate-attestation" "gate / gate"
           require_passed_check "cargo deny"
           require_passed_check "cargo audit"
           require_passed_check "osv scanner" "osv-scan"
