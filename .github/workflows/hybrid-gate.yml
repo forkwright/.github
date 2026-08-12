@@ -134,8 +134,20 @@ env:
 # caller's context in a reusable call) and repo-scoped, so each adopting repo
 # cancels only its own superseded PR runs. Callers must NOT also set a
 # concurrency group with this key, or the shared group self-cancels.
+#
+# WHY the SHA on a push: on a default branch the ref is CONSTANT, so a ref-keyed
+# group made every merge cancel the previous commit's gate. Measured in aletheia
+# over one window, two consecutive merges each lost their verdict entirely --
+# 53ba8110b and 8dd94b02c, where the caller's own jobs went green and every job
+# defined here was cancelled. The split fell exactly on the caller/callee
+# boundary, because the caller had already SHA-keyed its pushes for this reason
+# and this group had not. Worse than a missing verdict: `Evaluate gate result`
+# fails on a cancelled upstream, so the commit reports RED with nothing wrong,
+# which teaches people to discount red on a default branch.
+#
+# PRs keep ref-keying, so a force-push still supersedes its own in-flight run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: true
 
 jobs:
