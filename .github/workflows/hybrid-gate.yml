@@ -159,9 +159,20 @@ jobs:
       found: ${{ steps.trailer.outputs.found }}
       docs_only: ${{ steps.docs-only.outputs.docs_only }}
     steps:
+      # WHY the blob filter: this job needs full history (`fetch-depth: 0`) to
+      # read commit trailers and name changed paths, but it never reads file
+      # CONTENT. On a large adopting repo the unfiltered clone is the entire
+      # job, and when it exceeds `timeout-minutes: 5` the job reports
+      # `cancelled` — which the gate cannot distinguish from a supersede, so it
+      # fails a PR that nothing is wrong with. Measured in aletheia: two runs
+      # cancelled at exactly 5m04s and 5m02s, both inside this checkout step,
+      # on unrelated PRs. `blob:none` keeps every commit and tree while leaving
+      # blobs unfetched; git lazily fetches any it turns out to need, so a
+      # future step that does read content still works.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          filter: blob:none
           persist-credentials: false
 
       - name: Check for docs-only changeset
@@ -371,9 +382,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # WHY the blob filter: same reasoning as check-trailer above — this job
+      # scans commit messages and PR metadata, never file content, so the
+      # unfiltered full clone is pure cost against a 5-minute budget.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          filter: blob:none
           persist-credentials: false
 
       - name: Verify no AI attribution
