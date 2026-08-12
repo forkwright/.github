@@ -334,8 +334,26 @@ jobs:
           FLEET_REPO_TOKEN: ${{ secrets.FLEET_REPO_TOKEN }}
         run: |
           if [ -z "${FLEET_REPO_TOKEN}" ]; then
-            echo "FLEET_REPO_TOKEN is not set; fleet git deps will fail to fetch." >&2
-            exit 1
+            # WHY: dependabot-triggered runs read a separate secret store and receive no
+            # Actions secrets, so this token is ALWAYS empty for them. Every forkwright git
+            # dep is public, so anonymous fetch succeeds. Failing here made every bot PR
+            # unmergeable by construction — measured in aletheia, where dependabot PR #6679
+            # died at this step while #6681 two hours earlier passed it, because whether a
+            # run sees the secret depends on how it was triggered rather than on need.
+            # The token path stays for any future private dep; populate BOTH the Actions and
+            # Dependabot secret stores at that point.
+            #
+            # WHY warn-and-continue rather than a needs_fleet_repo_token=false caller opt-out:
+            # a caller cannot know at declaration time whether THIS run will be handed the
+            # secret. The condition is the run's trigger, not the repo's dependency set.
+            #
+            # NOTE: aletheia carries the identical guard in its own
+            # .github/actions/fleet-git-credentials composite. A reusable workflow cannot
+            # reference a composite from its own repo (`./` resolves against the CALLER's
+            # checkout), so this duplication is structural, not an oversight — keep the two
+            # in sync by hand.
+            echo "FLEET_REPO_TOKEN not set; skipping credential setup (public fleet deps fetch anonymously)."
+            exit 0
           fi
           git config --global credential.helper store
           printf 'https://forkwright:%s@github.com\n' "${FLEET_REPO_TOKEN}" > ~/.git-credentials
