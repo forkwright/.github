@@ -13,6 +13,12 @@ jobs:
   gate-attestation:
     name: gate-attestation
     runs-on: ubuntu-latest
+    # WHY an explicit bound: with none, this job inherits GitHub's 360-minute
+    # ceiling, so a wedged clone or a hung step burns six hours of metered
+    # minutes per occurrence while the PR shows a check that never resolves.
+    # The work is a shallow-content clone plus one `git log`; ten minutes is
+    # generous for that and still fails fast when something is genuinely stuck.
+    timeout-minutes: 10
     steps:
       # WHY: waiver keys off the PR author login, not github.actor — actor flips
       # to a maintainer login on "Re-run failed jobs", re-arming the check on bot PRs.
@@ -30,10 +36,17 @@ jobs:
           PR_HEAD_REF: ${{ github.head_ref }}
         run: echo "Gate attestation waived for trusted automation PR (author ${PR_AUTHOR}, branch ${PR_HEAD_REF})."
 
+      # WHY the blob filter: this job needs full history (`fetch-depth: 0`) to
+      # read the tip commit's trailer, but it never reads file CONTENT -- its
+      # only git call is `git log -1 --format=%b`. Unfiltered, the clone IS the
+      # job on a large adopting repo, and an overrun reports `cancelled` -- the
+      # same status GitHub uses for a superseded run, so a slow clone is
+      # indistinguishable from a supersede and presents as a gate failure.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.user.login != 'release-please[bot]' && !startsWith(github.head_ref, 'release-please--branches--') }}
         with:
           fetch-depth: 0
+          filter: blob:none
           persist-credentials: false
 
       - name: Verify Gate-Passed trailer
