@@ -468,7 +468,23 @@ jobs:
           # WHY line-anchored: PR bodies may legitimately discuss the policy in
           # prose (e.g. quoting "Co-authored-by: Claude …"). Only trailer-shaped
           # lines and explicit generated-with/robot markers are enforcement targets.
-          pattern='^(co-authored-by:.*(claude|gpt|codex|kimi|gemini|anthropic)|🤖|generated with)'
+          #
+          # WHY these specific alternates, each from an observed marker rather
+          # than from guessing at vendor names:
+          #   moonshot / openai   -- vendor names a co-authored-by trailer uses
+          #                          that the claude/gpt/codex/kimi/gemini/
+          #                          anthropic set does not cover.
+          #   🧠                   -- a second robot-class glyph seen alongside 🤖.
+          #   claude-session:      -- a trailer key emitted next to, not inside,
+          #                          the co-authored-by line, so the trailer
+          #                          alternate above never sees it.
+          #   https://claude.(ai|com)/
+          #                       -- the session and product URLs, which appear
+          #                          on their OWN line beneath the generated-with
+          #                          line. That line carries no 🤖 and no
+          #                          "generated with", so stripping the marker
+          #                          line above it left this one standing.
+          pattern='^(co-authored-by:.*(claude|gpt|codex|kimi|moonshot|gemini|anthropic|openai)|claude-session:|🤖|🧠|generated with|https://claude\.(ai|com)/)'
           violation=0
 
           title_hits=$(printf '%s\n' "$PR_TITLE" | grep -inE "$pattern" || true)
