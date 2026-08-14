@@ -24,6 +24,33 @@ name: Hybrid Gate (reusable)
 
 on:
   workflow_call:
+    # WHY expose this: under `strict: true` every merge invalidates every open
+    # PR, so a markdown-only change re-runs a caller's full required job. This
+    # workflow already computes exactly the fact that would avoid that, and a
+    # caller reimplementing the path patterns locally would be a second copy of
+    # logic that lives here -- free to diverge, and invisibly, since each side
+    # would look correct in isolation. (thumos#775 measured ~324s of armv7a
+    # cross-compile and QEMU witness matrix re-run twice for one one-line PR.)
+    #
+    # WARNING for callers: a caller must NOT gate a required check on this with
+    # a job-level `if:` or a `needs:` on a preflight job -- either leaves the
+    # required context never reporting, which strands the PR permanently. Gate
+    # the expensive STEPS inside the job instead, so the check still reports.
+    # A required check that can pass vacuously is worse than a slow one.
+    #
+    # WARNING on the empty case: this is empty rather than `false` when
+    # check-trailer is skipped or cancelled. Treat anything other than the
+    # literal `'true'` as not-docs-only -- the conservative direction, and the
+    # same one this workflow's own `docs-only` step takes for an empty diff.
+    outputs:
+      docs_only:
+        description: >-
+          `'true'` when every changed path matched the docs-only patterns
+          (`*.md`, `docs/*`, `llms.txt`) and the caller did not set
+          `docs_only_exemption`. Empty when check-trailer did not run to a
+          verdict. Callers should skip expensive steps only on the literal
+          string `'true'`.
+        value: ${{ jobs.check-trailer.outputs.docs_only }}
     inputs:
       rust_toolchain:
         description: >-
