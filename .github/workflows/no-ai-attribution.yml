@@ -28,10 +28,18 @@ jobs:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: echo "Attribution check waived for trusted automation PR author ${PR_AUTHOR}."
 
+      # WHY the blob filter: this job needs full history (`fetch-depth: 0`) to
+      # read commit messages, but it never reads file CONTENT -- every git call
+      # here is `git log --format=`. On a large adopting repo the unfiltered
+      # clone is the whole job, and when it overruns `timeout-minutes` the job
+      # reports `cancelled` -- the same status GitHub uses for a superseded run,
+      # so it is indistinguishable from a normal supersede in the checks list and
+      # presents as a policy failure rather than a slow clone.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.user.login != 'release-please[bot]' && github.event.pull_request.user.login != 'github-actions[bot]' }}
         with:
           fetch-depth: 0
+          filter: blob:none
           persist-credentials: false
 
       - name: Scan PR body and title for attribution markers
