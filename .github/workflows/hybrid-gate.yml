@@ -234,8 +234,16 @@ jobs:
           # Derive the range from whichever event actually fired. EVENT_BEFORE is all-zeros
           # on a branch's first push and may be absent from a shallow fetch, so fall back to
           # the head commit alone rather than assuming it resolves.
+          #
+          # WHY three-dot on the pull_request arm and two-dot on the push arms: `git diff A..B`
+          # is a plain comparison of two endpoints, not the range notation it looks like, so
+          # against a moving base it reports every file the BASE changed since the branch
+          # forked. A PR touching only README.md is then classified NOT docs-only the moment
+          # main lands an unrelated .rs commit. `A...B` diffs from the merge-base, which is the
+          # changeset the PR actually proposes and what the PR's "Files changed" tab shows.
+          # The push arms are correct as two-dot: before..after IS what that push changed.
           if [ -n "$BASE_REF" ]; then
-            range="origin/${BASE_REF}..HEAD"
+            range="origin/${BASE_REF}...HEAD"
           elif [ -n "$EVENT_BEFORE" ] \
             && git rev-parse --verify --quiet "${EVENT_BEFORE}^{commit}" >/dev/null 2>&1; then
             range="${EVENT_BEFORE}..HEAD"
