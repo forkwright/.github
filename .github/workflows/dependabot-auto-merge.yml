@@ -39,28 +39,46 @@ jobs:
             exit 1
           fi
           failed=0
-          # WHY: endswith — reusable-workflow checks are named "caller-job / leaf-job".
-          # Any given leaf satisfies the check: repos report the same verification
-          # under divergent names (kanon inlines "osv scanner"; theatron/aletheia
-          # delegate and report "… osv scanner / osv-scan").
+          # WHY match a normalised substring rather than an exact suffix: this
+          # file's header used to assert that required-check names are
+          # fleet-invariant. Measured, they are not -- the same OSV job is named
+          # `osv scanner` in one repo and `osv-scanner` in three others, and
+          # reusable-workflow checks arrive prefixed as "caller-job / leaf-job".
+          # `endswith("osv-scan")` matches neither `osv-scanner` (it ends in
+          # "scanner") nor `osv scanner`, so three repos could not adopt this
+          # workflow at all: it would refuse every PR whose OSV check had
+          # actually reported and passed. Stripping every non-alphanumeric from
+          # both sides and testing containment matches the whole spelling class
+          # instead of enumerating the two spellings seen so far -- an invariance
+          # asserted in a comment and enforced nowhere will drift again.
+          #
+          # WHY every match must pass, rather than the first one found: looser
+          # matching means a token can select several reported checks, and
+          # picking `[0]` of those made the verdict depend on the order GitHub
+          # happened to return them -- a superseded run could answer for a live
+          # one. Requiring all of them removes that arbitrariness and is strictly
+          # the safer direction for a guard whose failure mode is auto-merging.
           require_passed_check() {
-            local bucket leaf
+            local leaf buckets
             for leaf in "$@"; do
-              bucket=$(gh pr checks "$PR_URL" --json name,bucket \
-                --jq "[.[] | select(.name | ascii_downcase | endswith(\"$leaf\"))][0].bucket")
-              if [ -n "$bucket" ] && [ "$bucket" != "null" ]; then
-                if [ "$bucket" = "pass" ]; then
-                  return 0
+              buckets=$(gh pr checks "$PR_URL" --json name,bucket | jq -r --arg leaf "$leaf" \
+                '[.[] | select((.name | ascii_downcase | gsub("[^a-z0-9]"; "")) | contains($leaf)) | .bucket] | join(" ")')
+              [ -n "$buckets" ] || continue
+              for b in $buckets; do
+                if [ "$b" != "pass" ]; then
+                  echo "::error::Verification check matching '${leaf}' finished in bucket '${b}'."
+                  failed=1
                 fi
-                echo "::error::Required verification check ending '${leaf}' finished in bucket '${bucket}'."; failed=1; return 0
-              fi
+              done
+              return 0
             done
-            echo "::error::No required verification check ending in any of: $*."; failed=1
+            echo "::error::No required verification check matching any of: $*."; failed=1
           }
-          require_passed_check "gate-attestation" "gate / gate"
-          require_passed_check "cargo deny"
-          require_passed_check "cargo audit"
-          require_passed_check "osv scanner" "osv-scan"
+          # Tokens are the normalised form: lowercase, alphanumerics only.
+          require_passed_check "gateattestation" "gategate"
+          require_passed_check "cargodeny"
+          require_passed_check "cargoaudit"
+          require_passed_check "osvscan"
           [ "$failed" -eq 0 ] || { echo "Real verification checks missing/unsuccessful." >&2; exit 1; }
           echo "Required real verification checks passed."
 
