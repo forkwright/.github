@@ -22,13 +22,20 @@ jobs:
     steps:
       # WHY: waiver keys off the PR author login, not github.actor — actor flips
       # to a maintainer login on "Re-run failed jobs", re-arming the check on bot PRs.
-      # Release-please is ALSO waived branch-shaped: under GITHUB_TOKEN its PRs
-      # are authored as github-actions[bot] (and as the PAT owner once a PAT is
-      # wired) — the author varies, the branch pattern does not. Release-PR
-      # content is generated version bumps; its verification is the live
-      # deny/audit/osv checks.
+      #
+      # WARNING: the release-please branch pattern is paired with a Bot author
+      # type and is NEVER sufficient alone. `github.head_ref` is chosen by
+      # whoever opens the PR, so a branch-shaped waiver is a predicate the
+      # checked party controls: a branch named `release-please--branches--x`
+      # would otherwise skip the Gate-Passed trailer verification entirely on
+      # any content. The env-var indirection below already treats head_ref as
+      # attacker-controlled for shell-injection purposes — the same property
+      # disqualifies it as a trust predicate. The pattern stays because
+      # release-please's LOGIN varies (github-actions[bot] under GITHUB_TOKEN,
+      # a PAT owner after kanon#1092) while its branch shape does not;
+      # `user.type` is the half a pusher cannot forge.
       - name: Pass trusted automation PRs
-        if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' || github.event.pull_request.user.login == 'release-please[bot]' || startsWith(github.head_ref, 'release-please--branches--') }}
+        if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' || github.event.pull_request.user.login == 'release-please[bot]' || (startsWith(github.head_ref, 'release-please--branches--') && github.event.pull_request.user.type == 'Bot') }}
         env:
           # WHY: head_ref is attacker-controlled text — env-var indirection keeps
           # it out of shell interpolation (actionlint expression rule).
@@ -43,14 +50,14 @@ jobs:
       # same status GitHub uses for a superseded run, so a slow clone is
       # indistinguishable from a supersede and presents as a gate failure.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.user.login != 'release-please[bot]' && !startsWith(github.head_ref, 'release-please--branches--') }}
+        if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.user.login != 'release-please[bot]' && !(startsWith(github.head_ref, 'release-please--branches--') && github.event.pull_request.user.type == 'Bot') }}
         with:
           fetch-depth: 0
           filter: blob:none
           persist-credentials: false
 
       - name: Verify Gate-Passed trailer
-        if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.user.login != 'release-please[bot]' && !startsWith(github.head_ref, 'release-please--branches--') }}
+        if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.user.login != 'release-please[bot]' && !(startsWith(github.head_ref, 'release-please--branches--') && github.event.pull_request.user.type == 'Bot') }}
         # WHY (#2399): bind to the PR TIP, not "any PR commit". The old loop
         # passed if any ancestor carried a Gate-Passed trailer, so an un-stamped
         # tip could ride an earlier commit's attestation — a false green on the

@@ -446,15 +446,29 @@ jobs:
 
       - name: Verify no AI attribution
         # WHY: lifted verbatim from kanon's own gate-attestation.yml (and
-        # harmonia's inline copy) — one implementation, centralized. Waivers
-        # match check-trailer's: PR-author-shaped for dependabot, branch-shaped
-        # for release-please (its author varies: github-actions[bot] under
-        # GITHUB_TOKEN today, a future PAT owner post kanon#1092 — the branch
-        # pattern is what stays stable). Runs regardless of docs_only_exemption
-        # — a docs-only PR still carries its own title/body/commits and must
-        # not smuggle an attribution marker through the build exemption.
+        # harmonia's inline copy) — one implementation, centralized. Runs
+        # regardless of docs_only_exemption — a docs-only PR still carries its
+        # own title/body/commits and must not smuggle an attribution marker
+        # through the build exemption.
+        #
+        # WARNING: the release-please waiver requires BOTH the branch shape and
+        # a Bot author type, and neither alone is sufficient. `github.head_ref`
+        # is the branch name chosen by whoever opens the PR, so a branch-shaped
+        # waiver is a predicate the checked party controls — anyone could name a
+        # branch `release-please--branches--x` and exempt any content. The
+        # branch pattern still has to be part of it, because release-please's
+        # LOGIN varies (github-actions[bot] under GITHUB_TOKEN today, a PAT
+        # owner after kanon#1092) while its branch shape does not. `user.type`
+        # supplies the half the branch cannot: GitHub derives it from the
+        # resolved account and a pusher cannot set it.
+        #
+        # NOTE: when kanon#1092 moves release-please to a PAT-owned (human)
+        # account, `user.type` becomes "User" and this waiver stops firing — the
+        # release PR goes red rather than silently exempt, which is the correct
+        # direction to fail. Add that login to an explicit allowlist then.
         env:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
           PR_BODY: ${{ github.event.pull_request.body }}
           PR_HEAD_REF: ${{ github.head_ref }}
           PR_TITLE: ${{ github.event.pull_request.title }}
@@ -463,8 +477,11 @@ jobs:
         run: |
           case "$PR_HEAD_REF" in
             release-please--branches--*)
-              echo "Release-please branch ($PR_HEAD_REF): AI attribution check exempt."
-              exit 0
+              if [ "$PR_AUTHOR_TYPE" = "Bot" ]; then
+                echo "Release-please branch from bot author ($PR_AUTHOR): AI attribution check exempt."
+                exit 0
+              fi
+              echo "Branch $PR_HEAD_REF has the release-please shape but author $PR_AUTHOR is type ${PR_AUTHOR_TYPE:-unknown}, not Bot — not waiving."
               ;;
           esac
           if [ "$PR_AUTHOR" = "dependabot[bot]" ]; then
