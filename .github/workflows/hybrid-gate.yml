@@ -121,7 +121,14 @@ on:
         description: Timeout for the full-gate-build job.
         type: number
         required: false
-        default: 45
+        # WHY 90 and not 45: on 2026-08-18 cold caches (post-billing-outage
+        # expiry) canceled full-gate builds at 45m+ seconds on five repos in
+        # one day (harmonia#718, stathmos#127, typikon#176, akroasis#392,
+        # aletheia#6888) — each repo then bumped to 60-90 individually. The
+        # default should cover the fleet's cold-cache p95; it is a ceiling for
+        # runaway jobs, not a budget anyone is expected to consume. Repos with
+        # tighter budgets keep their explicit override.
+        default: 90
       ai_attribution_check:
         description: >-
           Run the fleet AI-attribution check (greps PR title/body and the
