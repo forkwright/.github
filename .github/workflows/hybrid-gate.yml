@@ -50,7 +50,7 @@ on:
           `docs_only_exemption`. Empty when check-trailer did not run to a
           verdict. Callers should skip expensive steps only on the literal
           string `'true'`.
-        value: ${{ jobs.check-trailer.outputs.docs_only }}
+        value: ${{ jobs.docs-only.outputs.docs_only }}
     inputs:
       rust_toolchain:
         description: >-
@@ -185,13 +185,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # WHY hybrid-gate CONSUMES the docs-only reusable rather than keeping its own copy: this verdict
+  # decides whether a full build runs, so a second implementation that drifts permissive reports
+  # success having built nothing — and two copies drift silently, because any given repo exercises
+  # only one of them. thumos#775 declined to re-implement it locally for exactly this reason.
+  #
+  # WHY pinned by SHA rather than `./` or `@main`: a relative `uses:` inside a reusable that is itself
+  # called from another repository is ambiguous about which repo it resolves against, and this repo
+  # had no nested-reusable precedent to settle it. A pinned absolute reference is unambiguous in both
+  # positions and matches how callers already pin this file.
+  docs-only:
+    uses: forkwright/.github/.github/workflows/docs-only.yml@bf948dfbfefa9b59c2d5f6b10b5eb0df3f24fb52 # main
+    with:
+      docs_only_exemption: ${{ inputs.docs_only_exemption }}
+
   check-trailer:
     name: check-trailer
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       found: ${{ steps.trailer.outputs.found }}
-      docs_only: ${{ steps.docs-only.outputs.docs_only }}
     steps:
       # WHY the blob filter: this job needs full history (`fetch-depth: 0`) to
       # read commit trailers and name changed paths, but it never reads file
@@ -208,80 +221,6 @@ jobs:
           fetch-depth: 0
           filter: blob:none
           persist-credentials: false
-
-      - name: Check for docs-only changeset
-        id: docs-only
-        # WHY: gated by docs_only_exemption so a repo can opt out entirely
-        # (docs_only stays false, full-gate-build always runs). Path patterns
-        # mirror kanon's own gate-attestation.yml doc-only exemption:
-        # bash case globs match `/` inside `*`, so `*.md` already covers
-        # nested paths (`**.md`) and `docs/*` already covers `docs/**` —
-        # no extglob needed. An empty diff (should not happen on a PR) is
-        # conservatively treated as NOT docs-only.
-        #
-        # WHY the pattern list is only `*.md|docs/*|llms.txt` (AGENTS.md and
-        # .github/*.md dropped): case-pattern `*` matches `/` too, so `*.md`
-        # already matches both `AGENTS.md` and any `.github/*.md` path —
-        # shellcheck SC2221/SC2222 correctly flags those two alternatives as
-        # dead (always overridden by the earlier `*.md` arm). Removing them
-        # changes no matching behavior, only the redundant spelling.
-        env:
-          DOCS_ONLY_EXEMPTION: ${{ inputs.docs_only_exemption }}
-          BASE_REF: ${{ github.base_ref }}
-          EVENT_BEFORE: ${{ github.event.before }}
-        run: |
-          if [ "$DOCS_ONLY_EXEMPTION" != "true" ]; then
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # WHY: github.base_ref is populated for pull_request events only. On a push it is
-          # empty, which produced the literal ref `origin/..HEAD` and killed this step with
-          # `fatal: ambiguous argument` — every push to a default branch failed the gate.
-          # Derive the range from whichever event actually fired. EVENT_BEFORE is all-zeros
-          # on a branch's first push and may be absent from a shallow fetch, so fall back to
-          # the head commit alone rather than assuming it resolves.
-          #
-          # WHY three-dot on the pull_request arm and two-dot on the push arms: `git diff A..B`
-          # is a plain comparison of two endpoints, not the range notation it looks like, so
-          # against a moving base it reports every file the BASE changed since the branch
-          # forked. A PR touching only README.md is then classified NOT docs-only the moment
-          # main lands an unrelated .rs commit. `A...B` diffs from the merge-base, which is the
-          # changeset the PR actually proposes and what the PR's "Files changed" tab shows.
-          # The push arms are correct as two-dot: before..after IS what that push changed.
-          if [ -n "$BASE_REF" ]; then
-            range="origin/${BASE_REF}...HEAD"
-          elif [ -n "$EVENT_BEFORE" ] \
-            && git rev-parse --verify --quiet "${EVENT_BEFORE}^{commit}" >/dev/null 2>&1; then
-            range="${EVENT_BEFORE}..HEAD"
-          elif git rev-parse --verify --quiet 'HEAD~1^{commit}' >/dev/null 2>&1; then
-            range="HEAD~1..HEAD"
-          else
-            range="HEAD"
-          fi
-
-          changed=$(git diff --name-only "$range")
-          if [ -z "$changed" ]; then
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          docs_only=true
-          while IFS= read -r f; do
-            [ -z "$f" ] && continue
-            case "$f" in
-              *.md|docs/*|llms.txt) ;;
-              *)
-                docs_only=false
-                ;;
-            esac
-          done <<< "$changed"
-
-          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
-          if [ "$docs_only" = true ]; then
-            echo "Docs-only changeset (all paths match **.md/docs/**/llms.txt/AGENTS.md/.github/*.md):"
-            printf '%s\n' "$changed" | sed 's/^/  doc: /'
-          fi
 
       - name: Check for Gate-Passed trailer
         id: trailer
@@ -320,8 +259,12 @@ jobs:
 
   full-gate-build:
     name: full-gate-build
-    needs: check-trailer
-    if: needs.check-trailer.outputs.found != 'true' && needs.check-trailer.outputs.docs_only != 'true'
+    # WHY docs-only is in needs and not merely referenced: `needs.<job>` is undefined for a job this
+    # one does not depend on, and the expression evaluates EMPTY rather than erroring. Here that
+    # fails safe -- empty != 'true', so the full build always runs -- but it would have disabled the
+    # docs-only exemption fleet-wide with nothing going red.
+    needs: [check-trailer, docs-only]
+    if: needs.check-trailer.outputs.found != 'true' && needs.docs-only.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.full_gate_timeout_minutes }}
     env:
@@ -565,7 +508,7 @@ jobs:
 
   gate:
     name: gate
-    needs: [check-trailer, full-gate-build, ai-attribution]
+    needs: [check-trailer, docs-only, full-gate-build, ai-attribution]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -573,7 +516,7 @@ jobs:
       - name: Evaluate gate result
         env:
           TRAILER_FOUND: ${{ needs.check-trailer.outputs.found }}
-          DOCS_ONLY: ${{ needs.check-trailer.outputs.docs_only }}
+          DOCS_ONLY: ${{ needs.docs-only.outputs.docs_only }}
           BUILD_RESULT: ${{ needs.full-gate-build.result }}
           ATTRIBUTION_RESULT: ${{ needs.ai-attribution.result }}
         run: |
