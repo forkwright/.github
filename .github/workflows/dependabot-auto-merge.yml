@@ -34,51 +34,108 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          if ! gh pr checks "$PR_URL" --watch --interval 30 --required; then
-            echo "Required CI checks did not pass; refusing auto-merge." >&2
-            exit 1
-          fi
-          failed=0
-          # WHY match a normalised substring rather than an exact suffix: this
-          # file's header used to assert that required-check names are
-          # fleet-invariant. Measured, they are not -- the same OSV job is named
-          # `osv scanner` in one repo and `osv-scanner` in three others, and
-          # reusable-workflow checks arrive prefixed as "caller-job / leaf-job".
-          # `endswith("osv-scan")` matches neither `osv-scanner` (it ends in
-          # "scanner") nor `osv scanner`, so three repos could not adopt this
-          # workflow at all: it would refuse every PR whose OSV check had
-          # actually reported and passed. Stripping every non-alphanumeric from
-          # both sides and testing containment matches the whole spelling class
-          # instead of enumerating the two spellings seen so far -- an invariance
-          # asserted in a comment and enforced nowhere will drift again.
+
+          # Token groups in NORMALISED form: lowercase, alphanumerics only. A group is satisfied by
+          # any one of its spellings, because the same job is named differently across repos.
           #
-          # WHY every match must pass, rather than the first one found: looser
-          # matching means a token can select several reported checks, and
-          # picking `[0]` of those made the verdict depend on the order GitHub
-          # happened to return them -- a superseded run could answer for a live
-          # one. Requiring all of them removes that arbitrariness and is strictly
-          # the safer direction for a guard whose failure mode is auto-merging.
-          require_passed_check() {
+          # WHY match a normalised substring rather than an exact suffix: this file's header used to
+          # assert that required-check names are fleet-invariant. Measured, they are not -- the same
+          # OSV job is named `osv scanner` in one repo and `osv-scanner` in three others, and
+          # reusable-workflow checks arrive prefixed as "caller-job / leaf-job". `endswith("osv-scan")`
+          # matches neither, so three repos could not adopt this workflow at all. Stripping every
+          # non-alphanumeric from both sides and testing containment matches the whole spelling class
+          # instead of enumerating the two spellings seen so far.
+          # WARNING: this array must NOT be named `GROUPS`. Bash maintains `GROUPS` itself as the
+          # current user's supplementary group IDs, and an assignment to it is silently ignored --
+          # the loop then iterates numeric GIDs, matches no check, and refuses every PR. That is the
+          # same always-refuse symptom this file is being fixed for, reached a different way, and it
+          # is invisible without RUNNING the script: the assignment raises no error. Caught by
+          # driving this step against synthetic check snapshots before it ever reached a runner.
+          CHECK_GROUPS=("gateattestation gategate" "cargodeny" "cargoaudit" "osvscan")
+
+          # WHY this polls for the groups to APPEAR instead of calling `gh pr checks --watch`:
+          # `--watch` waits only on the checks that exist WHEN WATCHING STARTS. On a fresh dependabot
+          # PR the fast checks report first, so `--watch --required` returned as soon as `cargo audit`
+          # and `cargo deny` passed while `gate / gate` was still building. Verification then ran
+          # against a check list that did not contain the gate yet and took its "no matching check"
+          # branch -- refusing a PR whose gate went on to pass green on the same head.
+          #
+          # The irony is the whole reason this file is preferred over branch protection: its
+          # distinguishing feature is noticing when a real verification check fails to report AT ALL,
+          # and it was evaluating that at a moment when a slow check legitimately had not reported.
+          # Gate Attestation trips it everywhere, because compiling the workspace makes it reliably
+          # the slowest -- the check most worth waiting for is the one most likely to be missed.
+          # See forkwright/.github#46.
+          #
+          # WHY a timeout that FAILS rather than falls through: a group that never reports is exactly
+          # the condition this guard exists to catch, so exhausting the wait must refuse. Falling
+          # through on timeout would turn the fix into the bug it replaces, in the unsafe direction.
+          WAIT_SECONDS="${AUTO_MERGE_WAIT_SECONDS:-5400}"
+          # WHY the poll interval is overridable: with it fixed at 30s, the only way to exercise the
+          # wait loop is to wait, so `tests/dependabot-auto-merge.sh` could not reach a third
+          # snapshot and reported the late-arriving-gate case as a refusal. A step that cannot be
+          # run faster than production cannot be tested, and this one is shell inside YAML that
+          # nothing else checks. Nothing in CI sets it.
+          POLL_SECONDS="${AUTO_MERGE_POLL_SECONDS:-30}"
+          deadline=$(( SECONDS + WAIT_SECONDS ))
+
+          # WHY one fetch per poll, reused across every group: the previous version called
+          # `gh pr checks` once PER TOKEN, so the four groups were answered from four different
+          # snapshots taken seconds apart. That is a second instance of the same race -- a check could
+          # be pending for one group's read and terminal for the next, and no single consistent view
+          # of the PR was ever evaluated.
+          snapshot=""
+          group_state() {
+            # Echoes: MISSING | PENDING | <space-separated terminal buckets>
             local leaf buckets
-            for leaf in "$@"; do
-              buckets=$(gh pr checks "$PR_URL" --json name,bucket | jq -r --arg leaf "$leaf" \
+            for leaf in $1; do
+              buckets=$(printf '%s' "$snapshot" | jq -r --arg leaf "$leaf" \
                 '[.[] | select((.name | ascii_downcase | gsub("[^a-z0-9]"; "")) | contains($leaf)) | .bucket] | join(" ")')
               [ -n "$buckets" ] || continue
-              for b in $buckets; do
-                if [ "$b" != "pass" ]; then
-                  echo "::error::Verification check matching '${leaf}' finished in bucket '${b}'."
-                  failed=1
-                fi
-              done
-              return 0
+              case " $buckets " in
+                *" pending "*) echo "PENDING"; return 0 ;;
+              esac
+              echo "$buckets"; return 0
             done
-            echo "::error::No required verification check matching any of: $*."; failed=1
+            echo "MISSING"
           }
-          # Tokens are the normalised form: lowercase, alphanumerics only.
-          require_passed_check "gateattestation" "gategate"
-          require_passed_check "cargodeny"
-          require_passed_check "cargoaudit"
-          require_passed_check "osvscan"
+
+          while :; do
+            snapshot=$(gh pr checks "$PR_URL" --json name,bucket)
+            waiting=""
+            for group in "${CHECK_GROUPS[@]}"; do
+              state=$(group_state "$group")
+              case "$state" in
+                MISSING|PENDING) waiting="${waiting}${group} (${state})\n" ;;
+              esac
+            done
+            [ -z "$waiting" ] && break
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              printf '::error::Verification checks never reached a terminal state within %ss:\n%b' \
+                "$WAIT_SECONDS" "$waiting" >&2
+              echo "A check that never reports is the condition this guard exists to catch; refusing auto-merge." >&2
+              exit 1
+            fi
+            printf 'Waiting on:\n%b' "$waiting"
+            sleep "$POLL_SECONDS"
+          done
+
+          # Every group is present and terminal. Now judge it.
+          #
+          # WHY every match must pass, rather than the first one found: looser matching means a token
+          # can select several reported checks, and picking `[0]` of those made the verdict depend on
+          # the order GitHub happened to return them -- a superseded run could answer for a live one.
+          # Requiring all of them removes that arbitrariness and is strictly the safer direction for a
+          # guard whose failure mode is auto-merging.
+          failed=0
+          for group in "${CHECK_GROUPS[@]}"; do
+            for b in $(group_state "$group"); do
+              if [ "$b" != "pass" ]; then
+                echo "::error::Verification check matching '${group}' finished in bucket '${b}'."
+                failed=1
+              fi
+            done
+          done
           [ "$failed" -eq 0 ] || { echo "Real verification checks missing/unsuccessful." >&2; exit 1; }
           echo "Required real verification checks passed."
 
