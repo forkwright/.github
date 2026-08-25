@@ -264,7 +264,18 @@ jobs:
     # fails safe -- empty != 'true', so the full build always runs -- but it would have disabled the
     # docs-only exemption fleet-wide with nothing going red.
     needs: [check-trailer, docs-only]
-    if: needs.check-trailer.outputs.found != 'true' && needs.docs-only.outputs.docs_only != 'true'
+    # WHY the event_name arm: a Gate-Passed trailer attests the tree it was
+    # computed on, and the tree a commit has once it is on the default branch
+    # is not that tree — landing rebases, squashes or merges it against
+    # whatever else arrived first. Before the merge the trailer is the best
+    # evidence available and skipping the build is the point; after it, the
+    # attested tree no longer exists and honouring the trailer would report
+    # the default branch as built without building it. A push therefore always
+    # takes the build path, whatever the pushed tip carries.
+    if: >-
+      needs.docs-only.outputs.docs_only != 'true'
+      && (github.event_name == 'push'
+          || needs.check-trailer.outputs.found != 'true')
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.full_gate_timeout_minutes }}
     env:
@@ -519,6 +530,7 @@ jobs:
           DOCS_ONLY: ${{ needs.docs-only.outputs.docs_only }}
           BUILD_RESULT: ${{ needs.full-gate-build.result }}
           ATTRIBUTION_RESULT: ${{ needs.ai-attribution.result }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           # WHY there is no automation-author waiver here: bot PRs
           # (dependabot, release-please) pass the same ladder as everyone —
@@ -535,7 +547,14 @@ jobs:
             exit 1
           fi
 
-          if [ "$TRAILER_FOUND" = "true" ]; then
+          # WHY the event guard: this arm exits before BUILD_RESULT is read, so
+          # without it a push whose tip happened to carry a trailer would pass
+          # the gate green while full-gate-build was skipped — or, once the job
+          # is forced to run on a push, while it was failing. The trailer
+          # attests a pre-merge tree; on the default branch only the build
+          # speaks for what is actually there. Mirrors the full-gate-build
+          # routing condition, which must stay in step with this one.
+          if [ "$TRAILER_FOUND" = "true" ] && [ "$EVENT_NAME" != "push" ]; then
             echo "Gate-Passed trailer verified."
             exit 0
           fi
