@@ -32,6 +32,16 @@ permissions:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    # WHY an explicit bound: with none, this job inherits GitHub's 360-minute
+    # ceiling, and a caller's `uses:` line cannot supply one for it — GitHub
+    # Actions only accepts `timeout-minutes` on a job with its own `steps:`,
+    # never on the caller's side of a reusable-workflow call. This is the one
+    # job in this repo's own workflows that had no bound at all. 10 minutes
+    # matches gate-attestation.yml and actionlint.yml: the work here is one
+    # action call that reads conventional commits and opens or updates a PR
+    # through the GitHub API, the same order of cost as those, not the
+    # compile-and-test work full-gate-build is timed for.
+    timeout-minutes: 10
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
