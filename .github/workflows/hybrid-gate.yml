@@ -314,7 +314,23 @@ jobs:
           components: rustfmt, clippy
           cache: false
 
+      # WHY guarded: rust-cache shells out to `cargo metadata`, which fails outright on a
+      # repo with no Cargo.toml -- `error: could not find Cargo.toml`. Consumers of this gate
+      # are not all Rust repos: several pass `true` for fmt/clippy/nextest and use check_cmd
+      # for their own non-Rust checks, which works fine until this step runs unasked and
+      # fails the whole job for a cache it could never have populated.
+      - name: Detect a Cargo manifest
+        id: cargo-manifest
+        run: |
+          if [ -f Cargo.toml ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "no Cargo.toml at the repo root; skipping the Rust build cache"
+          fi
+
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        if: steps.cargo-manifest.outputs.present == 'true'
         with:
           key: ${{ inputs.rust_cache_key }}
 
