@@ -3,10 +3,15 @@
 name: actionlint
 
 on:
+  # WHY no `paths:` filter: both jobs below are REQUIRED status checks on main.
+  # A required check that never runs blocks its PR permanently -- nothing fails,
+  # nothing is pending, and there is nothing to point at. A filter here would
+  # strand every PR touching only docs or a script outside `scripts/`.
+  #
+  # The cost is that a docs-only PR re-lints unchanged workflows. That is seconds,
+  # and it is the correct trade for the repository whose entire content is the CI
+  # eleven other repos inherit.
   pull_request:
-    paths:
-      - ".github/workflows/**"
-      - "scripts/**"
 
 permissions:
   contents: read
@@ -40,10 +45,10 @@ jobs:
       # the expressions but never evaluates them, so the gate's verdict ladder
       # is outside what it can see.
       #
-      # WARNING: this workflow is path-filtered. Do not add it to required
-      # status checks without dropping the `paths:` filter first — a required
-      # check that never runs blocks its PR permanently, with nothing failing
-      # and nothing pending to point at.
+      # NOTE: this job is a required status check on main, which is why the
+      # `paths:` filter was removed from the trigger above. Do not reintroduce
+      # one: a required check that cannot run on some PRs blocks those PRs
+      # forever, with nothing failing and nothing pending to point at.
       - name: Check the gate verdict against the event matrix
         run: |
           python3 -m pip install --quiet --disable-pip-version-check pyyaml
@@ -58,10 +63,10 @@ jobs:
     # step it missed). Runs beside actionlint because both answer "is this
     # workflow correct before 11 repos inherit it".
     #
-    # WARNING: this workflow is path-filtered, so it does not run on every PR.
-    # Do not add either job to required status checks without dropping the
-    # `paths:` filter first — a required check that never runs blocks its PR
-    # permanently, with nothing failing and nothing pending to point at.
+    # NOTE: this job is a required status check on main, which is why the
+    # `paths:` filter was removed from the trigger above. Do not reintroduce
+    # one: a required check that cannot run on some PRs blocks those PRs
+    # forever, with nothing failing and nothing pending to point at.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
