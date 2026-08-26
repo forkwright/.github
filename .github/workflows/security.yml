@@ -36,6 +36,20 @@ on:
         type: string
         default: "Cargo.lock"
         required: false
+      cargo_deny_arguments:
+        description: >-
+          Extra arguments passed to cargo-deny, e.g. "--all-features". Default empty,
+          which is cargo-deny's own default-features-only resolution.
+
+          WHY this exists: four repos (akroasis, epitelesis, logismos, politeia) pass
+          --all-features in their local security.yml, and this reusable could not express
+          it. Adopting the reusable would have silently narrowed their dependency scan to
+          default features -- a security check that quietly covers less than it did, which
+          is the worst direction for one to move in. Absent the input, the only options
+          were to keep four private copies or to regress them without noticing.
+        type: string
+        default: ""
+        required: false
     secrets:
       FLEET_REPO_TOKEN:
         required: false
@@ -73,6 +87,7 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check advisories licenses bans sources
+          arguments: ${{ inputs.cargo_deny_arguments }}
           credentials: ${{ inputs.has_private_deps && format('https://forkwright:{0}@github.com', secrets.FLEET_REPO_TOKEN) || '' }}
           use-git-cli: ${{ inputs.has_private_deps }}
 
