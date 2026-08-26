@@ -180,6 +180,20 @@ repo the token cannot search reads identically to one that never converted.
 | forkwright/typikon | gate-attestation, release-pr-checks |
 | forkwright/zetesis | gate-attestation, release-please, release-pr-checks, security |
 
+## Required checks on main
+
+`actionlint` and `event-shape-guards` are required status checks on `main`. Both live in
+`actionlint.yml` and both run on **every** pull request.
+
+WARNING for anyone editing `actionlint.yml`: do not reintroduce a `paths:` filter on its trigger.
+It carried one (`.github/workflows/**`, `scripts/**`) until it became required, and a required
+check that cannot run on some pull requests blocks those pull requests forever — nothing failing,
+nothing pending, nothing to point at. This repository has watched that happen to a sibling repo's
+`main`.
+
+The cost is that a docs-only pull request re-lints unchanged workflows. That is seconds, and it is
+the correct trade for the repository whose entire content is other repositories' CI.
+
 ## Visibility requirement
 
 This repo must remain **public**. GitHub does not allow private repos to call
