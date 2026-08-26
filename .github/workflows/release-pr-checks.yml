@@ -1,0 +1,101 @@
+# WHY this exists: release-please creates its PR with GITHUB_TOKEN, and GitHub raises no
+# workflow-triggering events for that token. Every release PR therefore arrives with its
+# required contexts ABSENT rather than red, and branch protection holds a PR with a
+# missing context forever -- nothing to re-run, nothing to approve.
+#
+# A missing check is worse than a failing one. A red check advertises itself; an absent
+# one looks exactly like a PR that has not finished. Measured 2026-08-26 across the
+# fleet: four release PRs stuck 8 days, `statusCheckRollup` empty while five runs sat at
+# `action_required`. The symptom was a PR that appeared to be waiting on CI.
+#
+# WHY reusable rather than a file per repo: aletheia carried the only copy for months
+# while 17 other release-please repos had none, and there was no way to tell from any of
+# them that they were missing it. One implementation, called everywhere, cannot drift.
+#
+# The operation is APPROVING the runs GitHub already created for the PR, not dispatching
+# new ones. Branch protection reads the PR's `statusCheckRollup`; a dispatched run's
+# check runs attach to the COMMIT, and the two are not the same list. Dispatch survives
+# only for a workflow with NO run at all -- it gets the run created, and the next tick
+# approves it.
+name: Release PR checks (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      required_context_workflows:
+        description: >-
+          Comma-separated workflow FILENAMES that produce this repo's branch-protection
+          required contexts. Scopes the fallback dispatch path only -- approval queries
+          every held run at the head SHA regardless of workflow, so the primary path is
+          correct even where this list is not.
+        required: false
+        type: string
+        default: "gate-attestation.yml,security.yml"
+      healer_ref:
+        description: >-
+          Ref of forkwright/.github to take the healer script from. Pin only to
+          reproduce a past run; the default tracks the reusable that is executing.
+        required: false
+        type: string
+        default: "main"
+
+permissions:
+  contents: read
+
+concurrency:
+  # WHY cancel-in-progress: release-please FORCE-PUSHES the release branch on every push
+  # to main, so two regenerations in quick succession would otherwise queue two sweeps
+  # and the older would act on a head that no longer exists. The newest is always right.
+  group: ${{ github.workflow }}-release-pr-checks
+  cancel-in-progress: true
+
+jobs:
+  heal:
+    name: a release PR has its required checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # actions: write approves the held runs; pull-requests: read finds the open
+      # release PR and its head SHA. Nothing here writes to a PR.
+      actions: write
+      contents: read
+      pull-requests: read
+    steps:
+      # WHY check out forkwright/.github and not the caller: the healer script is
+      # vendored HERE, beside the workflow that runs it, so the two version together.
+      # A `workflow_call` job's default checkout would fetch the CALLER's repo, where
+      # the script does not exist -- which is the whole point of centralising it.
+      - name: Fetch the healer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: forkwright/.github
+          ref: ${{ inputs.healer_ref }}
+          path: .healer
+          # WHY(filter): this job runs one Python script that only talks to the API.
+          filter: blob:none
+          persist-credentials: false
+
+      # WHY self-test before use: this healer's failure mode is a silent no-op, which
+      # looks identical to a repo that needed nothing. The tests assert the guards that
+      # distinguish those two, so running them is cheaper than trusting them.
+      - name: Self-test the healer
+        working-directory: .healer
+        run: python3 -m unittest discover -s scripts/tests -p 'test_release_pr_checks.py'
+
+      - name: Approve the release PR's held runs
+        env:
+          # WHY the plain GITHUB_TOKEN and no PAT: a workflow's own token CAN approve a
+          # held run given `actions: write`. The opposite was asserted in this file's
+          # ancestor for months and was never tested; it is false. Measured 2026-08-26 --
+          # a job holding only GITHUB_TOKEN posted to /actions/runs/{id}/approve for a
+          # genuinely held run and got 201, and the run moved action_required ->
+          # in_progress. A control probe against a run not awaiting approval returned
+          # 403 "This workflow run is not waiting for approval", a STATE message rather
+          # than "Resource not accessible by integration", so authorization had passed.
+          #
+          # This is why no consuming repo needs a shared credential, and why `secrets:`
+          # is absent above: there is nothing to inherit.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          REQUIRED_CONTEXT_WORKFLOWS: ${{ inputs.required_context_workflows }}
+        run: python3 .healer/scripts/release_pr_checks.py
