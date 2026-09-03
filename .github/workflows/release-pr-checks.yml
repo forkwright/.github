@@ -57,7 +57,12 @@ jobs:
     permissions:
       # actions: write approves the held runs; pull-requests: read finds the open
       # release PR and its head SHA. Nothing here writes to a PR.
+      # checks: read lets rollup_size() read statusCheckRollup via GraphQL — a
+      # non-empty rollup 403s without it (Resource not accessible by integration),
+      # which burned red hourly on hestia while the heal itself worked. Callers
+      # must also grant it: a caller cap downgrades whatever the callee declares.
       actions: write
+      checks: read
       contents: read
       pull-requests: read
     steps:
