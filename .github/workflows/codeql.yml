@@ -43,6 +43,10 @@ jobs:
     permissions:
       security-events: write
       contents: read
+      # WHY: analyze fingerprints SARIF via the Actions workflow-run API, which
+      # 403s on private repos without this grant (public repos silently fall
+      # back to public visibility — the failure only surfaces on private ones).
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -64,6 +68,10 @@ jobs:
     permissions:
       security-events: write
       contents: read
+      # WHY: analyze fingerprints SARIF via the Actions workflow-run API, which
+      # 403s on private repos without this grant (public repos silently fall
+      # back to public visibility — the failure only surfaces on private ones).
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
