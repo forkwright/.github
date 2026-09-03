@@ -73,22 +73,37 @@ on:
         required: false
         default: ""
       fmt_cmd:
-        description: The exact fmt-check command.
+        description: >-
+          The exact fmt-check command. Set to the empty string to skip this
+          step entirely (e.g. a non-Rust caller with no fmt-equivalent
+          stage) — mirrors doctest_cmd's existing skip-on-empty behavior.
         type: string
         required: false
         default: "cargo fmt --all -- --check"
       check_cmd:
-        description: The exact compile-check command.
+        description: >-
+          The exact compile-check command. This is the one check step with
+          no skip: it always runs, so a non-Rust caller (no Cargo.toml —
+          see the Detect-a-Cargo-manifest step below) wires its real check
+          pipeline here instead of leaving it empty. Chain multiple
+          commands with `&&` (the sphragis/hamma feature-matrix pattern)
+          for more than one stage. Deliberately excludes anything needing
+          the `kanon` binary — see the WHY above the fmt/check/clippy/
+          nextest steps for that boundary.
         type: string
         required: false
         default: "cargo check --workspace --all-targets"
       clippy_cmd:
-        description: The exact clippy command.
+        description: >-
+          The exact clippy command. Set to the empty string to skip this
+          step entirely, same as fmt_cmd.
         type: string
         required: false
         default: "cargo clippy --workspace --all-targets -- -D warnings"
       nextest_cmd:
-        description: The exact nextest invocation.
+        description: >-
+          The exact nextest invocation. Set to the empty string to skip
+          this step entirely, same as fmt_cmd.
         type: string
         required: false
         default: "cargo nextest run --workspace"
@@ -147,6 +162,13 @@ on:
           e.g. AGENTS.md or .github/CODEOWNERS.md, already matches the
           first pattern). Default true. Does not affect ai_attribution_check,
           which still runs on docs-only PRs.
+
+          WARNING for a docs-phase caller (no Cargo.toml — see
+          check_cmd/fmt_cmd/clippy_cmd/nextest_cmd above): the default
+          patterns match nearly all of that repo's content, so leaving this
+          at true exempts essentially every PR from ever running check_cmd —
+          a gate that verifies nothing is worse than no gate. Set false so
+          check_cmd's real, non-Rust checks actually run.
         type: boolean
         required: false
         default: true
@@ -302,23 +324,31 @@ jobs:
           echo "free disk after reclaim:"
           df -h / | tail -1
 
-      # WHY: empty toolchain input is deliberate — actions-rust-lang/setup-rust-toolchain
-      # auto-detects from the caller repo's own rust-toolchain.toml when no
-      # explicit `toolchain:` override is given, keeping the toolchain pin
-      # single-sourced in the file each repo already carries (never
-      # duplicated into this workflow's inputs unless a repo has no such
-      # file).
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
-        with:
-          toolchain: ${{ inputs.rust_toolchain }}
-          components: rustfmt, clippy
-          cache: false
-
-      # WHY guarded: rust-cache shells out to `cargo metadata`, which fails outright on a
-      # repo with no Cargo.toml -- `error: could not find Cargo.toml`. Consumers of this gate
-      # are not all Rust repos: several pass `true` for fmt/clippy/nextest and use check_cmd
-      # for their own non-Rust checks, which works fine until this step runs unasked and
-      # fails the whole job for a cache it could never have populated.
+      # WHY this step now runs first: it gates three consumers below (the
+      # toolchain install, the nextest-CLI install, and rust-cache), not
+      # just rust-cache alone — a step's `if:` can only read an earlier
+      # step's output, so detection has to precede all three, not just the
+      # one it originally guarded.
+      #
+      # WHY the gate widened past rust-cache: rust-cache was ALREADY guarded
+      # because it shells out to `cargo metadata`, which fails outright on a
+      # repo with no Cargo.toml (`error: could not find Cargo.toml`) — but
+      # the toolchain install and the nextest-CLI install ran unconditionally
+      # regardless, which is pure waste for a repo with nothing to build and,
+      # worse, is not even sufficient: fmt/check/clippy/nextest below still
+      # invoke `cargo`, and a repo with no Cargo.toml has no cargo to invoke.
+      # This is not hypothetical — dioptron#42 and mneme#3 (both design-phase
+      # repos, no root Cargo.toml) tried adopting this reusable as-is and
+      # were closed unmerged: "the run failed at `cargo metadata`, not on
+      # content." Widening this gate to the toolchain and nextest-CLI steps,
+      # plus making fmt_cmd/clippy_cmd/nextest_cmd individually skippable
+      # (same pattern doctest_cmd already used), is what that failure needed.
+      #
+      # WHY still derived from Cargo.toml presence, not a new declared input:
+      # a caller stating "I am not a Rust repo" is a second fact that can
+      # drift from the first the moment a Cargo.toml lands (e.g. at a
+      # design-phase repo's promotion to real code) and nobody flips the
+      # input back — the file on disk is the one fact that cannot go stale.
       - name: Detect a Cargo manifest
         id: cargo-manifest
         run: |
@@ -326,8 +356,26 @@ jobs:
             echo "present=true" >> "$GITHUB_OUTPUT"
           else
             echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "no Cargo.toml at the repo root; skipping the Rust build cache"
+            echo "no Cargo.toml at the repo root; skipping the Rust toolchain, cargo-nextest install, and build cache"
           fi
+
+      # WHY: empty toolchain input is deliberate — actions-rust-lang/setup-rust-toolchain
+      # auto-detects from the caller repo's own rust-toolchain.toml when no
+      # explicit `toolchain:` override is given, keeping the toolchain pin
+      # single-sourced in the file each repo already carries (never
+      # duplicated into this workflow's inputs unless a repo has no such
+      # file).
+      #
+      # WHY guarded: see the WHY above Detect a Cargo manifest — a repo with
+      # no Cargo.toml has no toolchain file for this action to detect either,
+      # and every consumer of a toolchain (fmt/check/clippy/nextest below)
+      # is cargo-shaped, so a non-Rust caller has no use for one.
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        if: steps.cargo-manifest.outputs.present == 'true'
+        with:
+          toolchain: ${{ inputs.rust_toolchain }}
+          components: rustfmt, clippy
+          cache: false
 
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         if: steps.cargo-manifest.outputs.present == 'true'
@@ -371,7 +419,12 @@ jobs:
           printf 'https://forkwright:%s@github.com\n' "${FLEET_REPO_TOKEN}" > ~/.git-credentials
           chmod 0600 ~/.git-credentials
 
+      # WHY guarded: same rationale as the toolchain-install step above — a
+      # repo with no Cargo.toml has no nextest_cmd invocation to serve (that
+      # step is itself skipped below when nextest_cmd is empty), so
+      # installing the CLI is pure cost with nothing that will call it.
       - name: Install cargo-nextest
+        if: steps.cargo-manifest.outputs.present == 'true'
         uses: taiki-e/install-action@742a3317eac7bd62f91cd888b4eead5e784ba833 # v2.87.1
         with:
           tool: nextest
@@ -380,16 +433,42 @@ jobs:
       # (fmt, check, clippy, nextest[, doctest]) — a Gate-Passed trailer and a
       # green full-gate-build must mean the same thing. The caller owns the
       # exact command strings; do not hardcode a repo's flags/features here.
+      #
+      # WHY fmt/clippy/nextest are individually skippable (empty string) but
+      # check is not: doctest_cmd already used empty-to-skip; fmt_cmd,
+      # clippy_cmd and nextest_cmd now match it, so a non-Rust caller with no
+      # fmt/clippy/nextest-equivalent stage can leave them empty rather than
+      # supplying a no-op command. check_cmd keeps no such escape — it is the
+      # one step guaranteed to run, so a caller cannot wire a full-gate-build
+      # that verifies nothing (the exact failure objection this reusable
+      # exists to prevent: see the WARNING on `docs_only_exemption` above,
+      # and kanon#2708, where two docs-phase repos' local gates attested only
+      # their own CI config and README and nothing else).
+      #
+      # WHY a `kanon lint`-dependent check does not belong in check_cmd for a
+      # docs-phase caller: the `kanon` binary is unpublished (no release
+      # artifacts — forkwright/kanon ships source only) and the repo housing
+      # it is private, so installing it here means two extra private
+      # checkouts, FLEET_REPO_TOKEN, and a `cargo install` on every PR — the
+      # exact cost epistole's own ci.yml comment cites for keeping its
+      # kanon-lint job deliberately NON-required (job-level `if`, skips
+      # clean rather than reporting a false green). check_cmd is the
+      # REQUIRED check; that cost does not belong on it. A caller that wants
+      # kanon-lint coverage adds it the way epistole does — a separate,
+      # non-required job beside the `gate:` call, not inside it.
       - name: fmt
+        if: inputs.fmt_cmd != ''
         run: ${{ inputs.fmt_cmd }}
 
       - name: check
         run: ${{ inputs.check_cmd }}
 
       - name: clippy
+        if: inputs.clippy_cmd != ''
         run: ${{ inputs.clippy_cmd }}
 
       - name: nextest
+        if: inputs.nextest_cmd != ''
         run: ${{ inputs.nextest_cmd }}
 
       - name: doctest
