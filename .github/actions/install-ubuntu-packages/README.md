@@ -16,6 +16,11 @@ runner's validated Ubuntu codename and uses that same set, plus fresh temporary
 APT lists and caches, for both `update` and `install`. It leaves the runner's
 configured sources and caches unchanged.
 
+The same settings are exported through an owned `APT_CONFIG` for package hooks'
+child APT clients. Candidate package names and versions come from the refreshed
+indexes; an exact `name=version` request prevents regex or suffix selection.
+Acquisition, child-APT, sandbox-access and cleanup failures fail the action.
+
 Consumer workflow references must use an immutable commit SHA. The existing
 GitHub Actions Dependabot configuration owns keeping those SHA references
 current through its normal review flow.

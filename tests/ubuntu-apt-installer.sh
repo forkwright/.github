@@ -91,7 +91,11 @@ rm() {
 }
 
 apt-cache() {
-  printf 'Package: %s\n' "${MOCK_METADATA_NAME:?}"
+  printf 'Package: %s\nVersion: 1.2.3-1\n' "${MOCK_METADATA_NAME:?}"
+}
+
+dpkg() {
+  [[ "$1" == --validate-version && "$2" == 1.2.3-1 ]]
 }
 
 apt-get() {
@@ -100,6 +104,7 @@ apt-get() {
   for index in "${!arguments[@]}"; do
     case "${arguments[$index]}" in
       update)
+        [[ "$APT_CONFIG" == "$scratch/forkwright-ubuntu-apt.fixture/apt.conf" ]]
         local expected
         for expected in \
           "Dir::Etc::sourcelist=$scratch/forkwright-ubuntu-apt.fixture/ubuntu.sources" \
@@ -114,6 +119,7 @@ apt-get() {
             printf 'missing isolated APT option: %s\n' "$expected" >&2
             return 1
           fi
+          grep -Fx "${expected%%=*} \"${expected#*=}\";" "$APT_CONFIG" >/dev/null
         done
         printf '%s\n' "${arguments[@]:0:index}" > "$scratch/update-options"
         printf 'update\n' >> "$scratch/calls"
@@ -154,7 +160,7 @@ BASH
   if [[ "$expected_install_calls" -eq 1 ]]; then
     cmp "$scratch/update-options" "$scratch/install-options"
     grep -Fx 'install' "$scratch/install-arguments" >/dev/null
-    grep -Fx 'libamdhip64-dev+' "$scratch/install-arguments" >/dev/null
+    grep -Fx 'libamdhip64-dev=1.2.3-1' "$scratch/install-arguments" >/dev/null
     grep -Fx -- -o "$scratch/directory-arguments" >/dev/null
     grep -Fx _apt "$scratch/directory-arguments" >/dev/null
     grep -Fx 0700 "$scratch/directory-arguments" >/dev/null
@@ -171,7 +177,63 @@ BASH
   rm -rf -- "$scratch"
 }
 
+assert_exact_selector_boundary() {
+  bash -s -- "$installer" <<'BASH'
+set -euo pipefail
+source "$1"
+apt-cache() {
+  printf 'Package: %s\nVersion: 1.2.3-1\n' "${@: -1}"
+}
+dpkg() {
+  [[ "$1" == --validate-version && "$2" == 1.2.3-1 ]]
+}
+for package in 'lib.foo' 'lib.foo+' 'lib.foo-' 'g++'; do
+  [[ "$(exact_package_spec "$package")" == "$package=1.2.3-1" ]]
+done
+apt-cache() {
+  printf 'Package: lib.foo\n'
+}
+if exact_package_spec lib.foo >/dev/null 2>&1; then
+  printf 'accepted package metadata without a candidate version\n' >&2
+  exit 1
+fi
+apt-cache() {
+  printf 'Package: lib.foo\nVersion: 1.2.3-1\n'
+  return 100
+}
+if exact_package_spec lib.foo >/dev/null 2>&1; then
+  printf 'accepted metadata from a failed apt-cache invocation\n' >&2
+  exit 1
+fi
+BASH
+}
+
+assert_child_apt_errors_are_fatal() {
+  local scratch diagnostic
+  scratch="$(mktemp -d)"
+  for diagnostic in 'E: fixture child cache failed' 'W: Download is performed unsandboxed as root'; do
+    if bash -s -- "$installer" "$scratch/apt.log" "$diagnostic" > "$scratch/output" 2>&1 <<'BASH'
+set -euo pipefail
+source "$1"
+log="$2"
+diagnostic="$3"
+successful_child() {
+  printf '%s\n' "$diagnostic"
+}
+run_apt "$log" successful_child
+BASH
+    then
+      printf 'accepted zero-exit child APT error: %s\n' "$diagnostic" >&2
+      return 1
+    fi
+    grep -F 'APT reported a child error' "$scratch/output" >/dev/null
+  done
+  rm -rf -- "$scratch"
+}
+
 assert_parser_boundary
+assert_exact_selector_boundary
+assert_child_apt_errors_are_fatal
 run_main_case 'successful install' 0 0 libamdhip64-dev 0 1
 run_main_case 'failed update prevents install' 100 0 libamdhip64-dev 100 0
 run_main_case 'failed install cleans up' 0 100 libamdhip64-dev 100 1

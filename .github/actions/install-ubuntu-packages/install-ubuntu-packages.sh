@@ -31,8 +31,8 @@ run_apt() {
   shift
 
   "$@" 2>&1 | tee "$log_file"
-  if grep -Fq 'unsandboxed as root' "$log_file"; then
-    fail 'APT downloaded outside its _apt sandbox'
+  if grep -Eq '^E:|unsandboxed as root' "$log_file"; then
+    fail 'APT reported a child error or downloaded outside its _apt sandbox'
     return 1
   fi
 }
@@ -119,19 +119,27 @@ Signed-By: $UBUNTU_KEYRING
 EOF
 }
 
-require_exact_package() {
+exact_package_spec() {
   local package="$1"
   shift
   local -a package_apt_options=("$@")
   local metadata
   local -a metadata_names=()
+  local -a metadata_versions=()
 
-  metadata="$(apt-cache "${package_apt_options[@]}" show --no-all-versions -- "$package")"
-  mapfile -t metadata_names < <(printf '%s\n' "$metadata" | awk '$1 == "Package:" { print $2 }')
+  metadata="$(apt-cache "${package_apt_options[@]}" show --no-all-versions -- "$package")" || return $?
+  mapfile -t metadata_names < <(printf '%s\n' "$metadata" | awk '/^Package: / { print substr($0, 10) }')
+  mapfile -t metadata_versions < <(printf '%s\n' "$metadata" | awk '/^Version: / { print substr($0, 10) }')
   if [[ "${#metadata_names[@]}" -ne 1 || "${metadata_names[0]}" != "$package" ]]; then
     fail "package must resolve to one exact Ubuntu binary package: $package"
     return 1
   fi
+  if [[ "${#metadata_versions[@]}" -ne 1 ]]; then
+    fail "package must resolve to one exact candidate version: $package"
+    return 1
+  fi
+  dpkg --validate-version "${metadata_versions[0]}" || return $?
+  printf '%s=%s\n' "$package" "${metadata_versions[0]}"
 }
 
 main() {
@@ -187,12 +195,22 @@ main() {
     -o Acquire::https::Timeout=120
   )
 
+  # WHY: dpkg hooks can spawn APT clients that do not inherit command-line
+  # options. Export the same configuration without disabling normal hooks.
+  local apt_config="$temp_dir/apt.conf"
+  local option_index option
+  for ((option_index=1; option_index<${#apt_options[@]}; option_index+=2)); do
+    option="${apt_options[option_index]}"
+    printf '%s "%s";\n' "${option%%=*}" "${option#*=}"
+  done > "$apt_config"
+  export APT_CONFIG="$apt_config"
+
   run_apt "$temp_dir/update.log" apt-get "${apt_options[@]}" update
   local -a install_specs=()
-  local package
+  local package install_spec
   for package in "${packages[@]}"; do
-    require_exact_package "$package" "${apt_options[@]}"
-    install_specs+=("${package}+")
+    install_spec="$(exact_package_spec "$package" "${apt_options[@]}")" || return $?
+    install_specs+=("$install_spec")
   done
   run_apt "$temp_dir/install.log" apt-get "${apt_options[@]}" install --yes --no-install-recommends -- "${install_specs[@]}"
 }
