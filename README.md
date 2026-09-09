@@ -108,6 +108,7 @@ read-only summary. `docs-only` is not called directly by any consumer today;
 | hybrid-gate | `rust_cache_key` | `gate-attestation` | Swatinem/rust-cache cache key discriminator. |
 | hybrid-gate | `rust_toolchain` | `` | Rust toolchain channel (e.g. "1.89", "stable"). Empty (default) auto-detects from the caller repo's own rust-toolchain.toml/rust-toolchain file — the fleet convention. Set only for a repo with no toolchain file of its own. |
 | hybrid-gate | `system_packages` | `` | Space-separated apt package list to install before check/clippy/nextest. Empty skips the install step. |
+| hybrid-gate | `system_packages_ubuntu_only` | `false` | Install system_packages through the isolated Ubuntu-only package installer. Default false preserves the runner's existing apt-get install path; set true only for packages supplied by Ubuntu. |
 | no-ai-attribution | `pattern_file` | `.github/no-ai-attribution-patterns.txt` | |
 | release-please | `config_file` | `release-please-config.json` | |
 | release-please | `manifest_file` | `.release-please-manifest.json` | |
