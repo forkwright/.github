@@ -1,0 +1,43 @@
+name: Ubuntu APT installer
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  installs-from-isolated-sources:
+    name: installs from isolated sources
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Assert the test package is absent
+        run: |
+          if [[ "$(dpkg-query --show --showformat='${db:Status-Status}' sl 2>/dev/null || true)" == installed ]]; then
+            echo 'sl is unexpectedly preinstalled; choose a package absent from the hosted runner.' >&2
+            exit 1
+          fi
+      - name: Add an unrelated malformed APT source
+        run: |
+          printf '%s\n' 'not-a-deb-line' | sudo tee /etc/apt/sources.list.d/forkwright-unrelated-broken.list >/dev/null
+      - name: Install a real Ubuntu package
+        uses: ./.github/actions/install-ubuntu-packages
+        with:
+          packages: sl
+      - name: Verify package installation and cleanup
+        run: |
+          [[ "$(dpkg-query --show --showformat='${db:Status-Status}' sl)" == installed ]]
+          [[ -x /usr/games/sl ]]
+          if compgen -G '/tmp/forkwright-ubuntu-apt.*' >/dev/null; then
+            echo 'installer left temporary APT state behind.' >&2
+            exit 1
+          fi
+      - name: Remove the unrelated malformed APT source
+        if: ${{ always() }}
+        run: sudo rm -f -- /etc/apt/sources.list.d/forkwright-unrelated-broken.list

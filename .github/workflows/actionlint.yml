@@ -39,6 +39,9 @@ jobs:
       - name: Run actionlint
         run: ./actionlint -color .github/workflows/*.yml
 
+      - name: Test Ubuntu APT installer
+        run: bash tests/ubuntu-apt-installer.sh
+
       # WHY here rather than in a job of its own: actionlint answers "is this
       # workflow well-formed before 11 repos inherit it", and so does this —
       # same question, same trigger, no second checkout. actionlint type-checks
