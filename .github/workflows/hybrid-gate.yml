@@ -72,6 +72,14 @@ on:
         type: string
         required: false
         default: ""
+      system_packages_ubuntu_only:
+        description: >-
+          Install system_packages through the isolated Ubuntu-only package
+          installer. Default false preserves the runner's existing apt-get
+          install path; set true only for packages supplied by Ubuntu.
+        type: boolean
+        required: false
+        default: false
       fmt_cmd:
         description: >-
           The exact fmt-check command. Set to the empty string to skip this
@@ -383,10 +391,16 @@ jobs:
           key: ${{ inputs.rust_cache_key }}
 
       - name: Install system dependencies
-        if: inputs.system_packages != ''
+        if: inputs.system_packages != '' && !inputs.system_packages_ubuntu_only
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends ${{ inputs.system_packages }}
+
+      - name: Install Ubuntu-only system dependencies
+        if: inputs.system_packages != '' && inputs.system_packages_ubuntu_only
+        uses: forkwright/.github/.github/actions/install-ubuntu-packages@637f0e9d1b795e455d1dea96824ad7322002019f
+        with:
+          packages: ${{ inputs.system_packages }}
 
       - name: Configure git credentials for fleet deps
         if: inputs.needs_fleet_repo_token

@@ -57,6 +57,8 @@ jobs:
           python3 -m pip install --quiet --disable-pip-version-check pyyaml
           python3 scripts/check_gate_evaluation.py \
             .github/workflows/hybrid-gate.yml
+          python3 scripts/check_hybrid_gate_ubuntu_packages.py \
+            .github/workflows/hybrid-gate.yml
 
   event-shape-guards:
     name: event-shape-guards

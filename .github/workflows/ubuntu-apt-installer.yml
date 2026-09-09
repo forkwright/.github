@@ -41,3 +41,22 @@ jobs:
       - name: Remove the unrelated malformed APT source
         if: ${{ always() }}
         run: sudo rm -f -- /etc/apt/sources.list.d/forkwright-unrelated-broken.list
+
+  # WHY: hybrid-gate keys cancellation on its own workflow/ref, so sibling
+  # reusable fixture jobs would cancel each other if this caller added one.
+  installs-through-hybrid-gate:
+    name: installs through hybrid gate
+    uses: ./.github/workflows/hybrid-gate.yml
+    with:
+      system_packages: sl
+      system_packages_ubuntu_only: true
+      fmt_cmd: ""
+      check_cmd: |
+        [[ "$(dpkg-query --show --showformat='${db:Status-Status}' sl)" == installed ]]
+        [[ -x /usr/games/sl ]]
+      clippy_cmd: ""
+      nextest_cmd: ""
+      doctest_cmd: ""
+      docs_only_exemption: false
+      needs_fleet_repo_token: false
+      full_gate_timeout_minutes: 10
