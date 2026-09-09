@@ -3,11 +3,10 @@
 Reusable CI workflows for the forkwright fleet. All repos call these instead of
 maintaining local copies.
 
-`.github/workflows/` holds 11 files. actionlint.yml lints THIS repo's own
-workflows on its own pull requests and is never called by a consumer. The
-other 10 declare `workflow_call` and are the fleet reusables; every input
-they accept is in [Workflow inputs](#workflow-inputs) below, generated from
-those files rather than typed by hand — run
+Reusable files in `.github/workflows/` declare `workflow_call`; the remaining
+workflows validate this repository's workflow and installer behavior. Every
+reusable input is in [Workflow inputs](#workflow-inputs) below, generated from
+the declarations rather than typed by hand — run
 `python3 scripts/render_readme_tables.py` to refresh this README's three
 generated sections (Workflow inputs, Pinned action versions, Fleet rollout)
 against whatever the tree and the org currently look like, and splice its
@@ -16,7 +15,7 @@ output back in.
 ## Caller pattern
 
 Each repo keeps a thin `.github/workflows/<name>.yml` that delegates entirely.
-Four of the ten reusables illustrated below; the rest follow the identical
+The examples below illustrate the caller pattern; other reusables follow the same
 `uses: forkwright/.github/.github/workflows/<name>.yml@main` shape with their
 own inputs from the table below.
 

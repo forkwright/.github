@@ -19,6 +19,17 @@ cleanup() {
   fi
 }
 
+run_apt() {
+  local log_file="$1"
+  shift
+
+  "$@" 2>&1 | tee "$log_file"
+  if grep -Fq 'unsandboxed as root' "$log_file"; then
+    fail 'APT downloaded outside its _apt sandbox'
+    return 1
+  fi
+}
+
 parse_packages() {
   local package_input="$1"
   local -n package_names="$2"
@@ -101,6 +112,21 @@ Signed-By: $UBUNTU_KEYRING
 EOF
 }
 
+require_exact_package() {
+  local package="$1"
+  shift
+  local -a package_apt_options=("$@")
+  local metadata
+  local -a metadata_names=()
+
+  metadata="$(apt-cache "${package_apt_options[@]}" show --no-all-versions -- "$package")"
+  mapfile -t metadata_names < <(printf '%s\n' "$metadata" | awk '$1 == "Package:" { print $2 }')
+  if [[ "${#metadata_names[@]}" -ne 1 || "${metadata_names[0]}" != "$package" ]]; then
+    fail "package must resolve to one exact Ubuntu binary package: $package"
+    return 1
+  fi
+}
+
 main() {
   if [[ "$#" -ne 1 ]]; then
     fail 'expected one packages argument'
@@ -126,8 +152,12 @@ main() {
   cleanup_dir="$temp_dir"
   trap cleanup EXIT
 
+  chmod 0755 "$temp_dir"
   install -d -m 0755 \
     "$sourceparts_dir" \
+    "$lists_dir" \
+    "$archives_dir"
+  install -d -o _apt -g root -m 0700 \
     "$lists_dir/partial" \
     "$archives_dir/partial"
   write_sources "$sources_file"
@@ -145,15 +175,16 @@ main() {
     -o Acquire::https::Timeout=120
   )
 
-  apt-get "${apt_options[@]}" update
-  apt-get "${apt_options[@]}" install --yes --no-install-recommends -- "${packages[@]}"
+  run_apt "$temp_dir/update.log" apt-get "${apt_options[@]}" update
+  local -a install_specs=()
+  local package
+  for package in "${packages[@]}"; do
+    require_exact_package "$package" "${apt_options[@]}"
+    install_specs+=("${package}+")
+  done
+  run_apt "$temp_dir/install.log" apt-get "${apt_options[@]}" install --yes --no-install-recommends -- "${install_specs[@]}"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-  if [[ "$#" -eq 2 && "$1" == --validate-package-input ]]; then
-    packages=()
-    parse_packages "$2" packages
-    exit 0
-  fi
   main "$@"
 fi

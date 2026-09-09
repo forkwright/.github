@@ -39,7 +39,7 @@ jobs:
       - name: Run actionlint
         run: ./actionlint -color .github/workflows/*.yml
 
-      - name: Test Ubuntu APT installer input boundary
+      - name: Test Ubuntu APT installer
         run: bash tests/ubuntu-apt-installer.sh
 
       # WHY here rather than in a job of its own: actionlint answers "is this
