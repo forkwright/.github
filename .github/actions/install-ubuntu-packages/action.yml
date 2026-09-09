@@ -1,0 +1,18 @@
+name: Install Ubuntu packages
+description: Install exact Ubuntu package names from isolated, canonical Ubuntu archives.
+
+inputs:
+  packages:
+    description: Whitespace-separated exact Ubuntu package names.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install packages from isolated Ubuntu archives
+      shell: bash
+      env:
+        PACKAGE_INPUT: ${{ inputs.packages }}
+      run: >-
+        sudo --preserve-env=RUNNER_TEMP bash
+        "$GITHUB_ACTION_PATH/install-ubuntu-packages.sh" "$PACKAGE_INPUT"
