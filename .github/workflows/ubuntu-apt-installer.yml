@@ -42,8 +42,8 @@ jobs:
         if: ${{ always() }}
         run: sudo rm -f -- /etc/apt/sources.list.d/forkwright-unrelated-broken.list
 
-  # No caller concurrency group: hybrid-gate keys cancellation on its own
-  # workflow/ref, so sibling reusable fixture jobs would cancel each other.
+  # WHY: hybrid-gate keys cancellation on its own workflow/ref, so sibling
+  # reusable fixture jobs would cancel each other if this caller added one.
   installs-through-hybrid-gate:
     name: installs through hybrid gate
     uses: ./.github/workflows/hybrid-gate.yml
