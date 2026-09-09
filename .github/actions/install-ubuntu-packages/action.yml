@@ -14,5 +14,5 @@ runs:
       env:
         PACKAGE_INPUT: ${{ inputs.packages }}
       run: >-
-        sudo --preserve-env=RUNNER_TEMP /usr/bin/bash -p
+        sudo /usr/bin/bash -p
         "$GITHUB_ACTION_PATH/install-ubuntu-packages.sh" "$PACKAGE_INPUT"

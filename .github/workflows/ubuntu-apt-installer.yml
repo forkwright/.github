@@ -34,7 +34,7 @@ jobs:
         run: |
           [[ "$(dpkg-query --show --showformat='${db:Status-Status}' sl)" == installed ]]
           [[ -x /usr/games/sl ]]
-          if compgen -G "${RUNNER_TEMP}/forkwright-ubuntu-apt.*" >/dev/null; then
+          if compgen -G '/tmp/forkwright-ubuntu-apt.*' >/dev/null; then
             echo 'installer left temporary APT state behind.' >&2
             exit 1
           fi

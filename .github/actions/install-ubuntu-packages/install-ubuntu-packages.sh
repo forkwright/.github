@@ -2,6 +2,7 @@
 set -euo pipefail
 
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export LC_ALL=C
 
 readonly PACKAGE_NAME_PATTERN='^[a-z0-9][a-z0-9+.-]*$'
 readonly UBUNTU_CODENAME_PATTERN='^[a-z][a-z0-9-]*$'
@@ -14,9 +15,15 @@ fail() {
 }
 
 cleanup() {
-  if [[ -n "$cleanup_dir" ]]; then
-    rm -rf -- "$cleanup_dir"
+  local status=$?
+  trap - EXIT
+  if [[ -n "$cleanup_dir" ]] && ! rm -rf -- "$cleanup_dir"; then
+    printf 'ubuntu package installer: cannot remove owned temporary state: %s\n' "$cleanup_dir" >&2
+    if [[ "$status" -eq 0 ]]; then
+      status=1
+    fi
   fi
+  exit "$status"
 }
 
 run_apt() {
@@ -141,9 +148,10 @@ main() {
   parse_packages "$1" packages
   load_ubuntu_release
 
-  local temp_parent temp_dir sources_file sourceparts_dir lists_dir cache_dir archives_dir
-  temp_parent="${RUNNER_TEMP:-/tmp}"
-  temp_dir="$(mktemp -d "$temp_parent/forkwright-ubuntu-apt.XXXXXXXX")"
+  local temp_dir sources_file sourceparts_dir lists_dir cache_dir archives_dir
+  # WHY: RUNNER_TEMP can have private ancestors that _apt cannot traverse.
+  # Only the fresh child is ours to change; never loosen runner-home permissions.
+  temp_dir="$(mktemp -d /tmp/forkwright-ubuntu-apt.XXXXXXXX)"
   sources_file="$temp_dir/ubuntu.sources"
   sourceparts_dir="$temp_dir/sourceparts"
   lists_dir="$temp_dir/lists"
@@ -161,6 +169,10 @@ main() {
     "$lists_dir/partial" \
     "$archives_dir/partial"
   write_sources "$sources_file"
+
+  runuser --user _apt -- /usr/bin/test -r "$sources_file"
+  runuser --user _apt -- /usr/bin/test -w "$lists_dir/partial"
+  runuser --user _apt -- /usr/bin/test -w "$archives_dir/partial"
 
   local -a apt_options=(
     -o "Dir::Etc::sourcelist=$sources_file"
