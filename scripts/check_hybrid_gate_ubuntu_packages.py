@@ -62,7 +62,8 @@ def validate(document: dict[str, Any]) -> list[str]:
         failures.append("missing system_packages_ubuntu_only workflow_call input")
     else:
         for field, expected in expected_spec.items():
-            if input_spec.get(field) != expected:
+            actual = input_spec.get(field)
+            if type(actual) is not type(expected) or actual != expected:
                 failures.append(
                     f"system_packages_ubuntu_only.{field} is {input_spec.get(field)!r}, "
                     f"expected {expected!r}"
@@ -106,6 +107,12 @@ def assert_negative_cases(document: dict[str, Any]) -> list[str]:
             "default true",
             lambda item: workflow_call(item)["inputs"]["system_packages_ubuntu_only"].update(
                 default=True
+            ),
+        ),
+        (
+            "numeric false lookalike",
+            lambda item: workflow_call(item)["inputs"]["system_packages_ubuntu_only"].update(
+                default=0
             ),
         ),
         (
@@ -153,11 +160,13 @@ def main() -> int:
         return 1
 
     failures = validate(document)
-    failures.extend(assert_negative_cases(document))
+    if not failures:
+        failures.extend(assert_negative_cases(document))
     if failures:
         for failure in failures:
             print(f"FAIL: {failure}", file=sys.stderr)
         return 1
+    print("Ubuntu package opt-in contract and negative mutations: ok")
     return 0
 
 
