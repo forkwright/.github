@@ -378,7 +378,7 @@ jobs:
       # no Cargo.toml has no toolchain file for this action to detect either,
       # and every consumer of a toolchain (fmt/check/clippy/nextest below)
       # is cargo-shaped, so a non-Rust caller has no use for one.
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         if: steps.cargo-manifest.outputs.present == 'true'
         with:
           toolchain: ${{ inputs.rust_toolchain }}
