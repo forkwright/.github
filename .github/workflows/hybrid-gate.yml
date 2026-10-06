@@ -439,7 +439,7 @@ jobs:
       # installing the CLI is pure cost with nothing that will call it.
       - name: Install cargo-nextest
         if: steps.cargo-manifest.outputs.present == 'true'
-        uses: taiki-e/install-action@742a3317eac7bd62f91cd888b4eead5e784ba833 # v2.87.1
+        uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7 # v2.87.23
         with:
           tool: nextest
 
